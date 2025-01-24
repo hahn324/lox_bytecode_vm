@@ -3,16 +3,26 @@ use crate::value::Value;
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u8)]
 pub enum OpCode {
-    OpReturn,
-    OpConstant,
-    OpConstantLong,
+    Return,
+    Constant,
+    ConstantLong,
+    Negate,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
         match byte {
-            0 => OpCode::OpReturn,
-            1 => OpCode::OpConstant,
-            2 => OpCode::OpConstantLong,
+            0 => OpCode::Return,
+            1 => OpCode::Constant,
+            2 => OpCode::ConstantLong,
+            3 => OpCode::Negate,
+            4 => OpCode::Add,
+            5 => OpCode::Subtract,
+            6 => OpCode::Multiply,
+            7 => OpCode::Divide,
             _ => panic!("Unknown byte code {byte}"),
         }
     }
@@ -45,12 +55,12 @@ impl Chunk {
     pub fn write_constant(&mut self, value: Value, line: usize) {
         let constant_offset = self.add_constant(value);
         if constant_offset < 256 {
-            self.code.push(OpCode::OpConstant as u8);
+            self.code.push(OpCode::Constant as u8);
             self.add_line(line);
             self.code.push(constant_offset as u8);
             self.add_line(line);
         } else {
-            self.code.push(OpCode::OpConstantLong as u8);
+            self.code.push(OpCode::ConstantLong as u8);
             self.add_line(line);
             self.code.extend_from_slice(&[
                 (constant_offset >> 16) as u8,

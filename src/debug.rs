@@ -9,7 +9,7 @@ pub fn disassemble_chunk(chunk: &Chunk, name: &str) {
     }
 }
 
-fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
+pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
     print!("{offset:04} ");
     if offset > 0 && chunk.get_line(offset) == chunk.get_line(offset - 1) {
         print!("   | ");
@@ -19,9 +19,14 @@ fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
 
     let instruction = chunk.code[offset];
     match OpCode::from(instruction) {
-        OpCode::OpReturn => simple_instruction("OpReturn", offset),
-        OpCode::OpConstant => constant_instruction("OpConstant", chunk, offset),
-        OpCode::OpConstantLong => constant_long_instruction("OpConstantLong", chunk, offset),
+        OpCode::Return => simple_instruction("OP_RETURN", offset),
+        OpCode::Constant => constant_instruction("OP_CONSTANT", chunk, offset),
+        OpCode::ConstantLong => constant_long_instruction("OP_CONSTANTLONG", chunk, offset),
+        OpCode::Negate => simple_instruction("OP_NEGATE", offset),
+        OpCode::Add => simple_instruction("OP_ADD", offset),
+        OpCode::Subtract => simple_instruction("OP_SUBTRACT", offset),
+        OpCode::Multiply => simple_instruction("OP_MULTIPLY", offset),
+        OpCode::Divide => simple_instruction("OP_DIVIDE", offset),
     }
 }
 
@@ -40,13 +45,10 @@ fn constant_instruction(name: &str, chunk: &Chunk, offset: usize) -> usize {
 }
 
 fn constant_long_instruction(name: &str, chunk: &Chunk, offset: usize) -> usize {
-    let right_byte = chunk.code[offset + 1];
-    let middle_byte = chunk.code[offset + 2];
-    let left_byte = chunk.code[offset + 3];
-    let constant = ((right_byte as u32) << 16) + ((middle_byte as u32) << 8) + left_byte as u32;
-    println!(
-        "{name:<16} {constant:4} '{:?}'",
-        chunk.constants[constant as usize]
-    );
+    let right_byte = chunk.code[offset + 1] as usize;
+    let middle_byte = chunk.code[offset + 2] as usize;
+    let left_byte = chunk.code[offset + 3] as usize;
+    let constant = (right_byte << 16) + (middle_byte << 8) + left_byte;
+    println!("{name:<16} {constant:4} '{:?}'", chunk.constants[constant]);
     offset + 4
 }
