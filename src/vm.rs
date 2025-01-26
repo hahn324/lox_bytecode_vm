@@ -1,5 +1,6 @@
 use crate::{
     chunk::{Chunk, OpCode},
+    compiler::compile,
     debug::disassemble_instruction,
     value::Value,
 };
@@ -26,10 +27,9 @@ impl<'c> Vm<'c> {
         }
     }
 
-    pub fn interpret(&mut self, chunk: &'c Chunk) -> InterpretResult {
-        self.chunk = Some(chunk);
-        self.ip = 0;
-        self.run()
+    pub fn interpret(&mut self, source: &str) -> InterpretResult {
+        compile(source);
+        InterpretResult::InterpretOk
     }
 
     fn run(&mut self) -> InterpretResult {

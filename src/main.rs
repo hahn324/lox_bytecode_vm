@@ -1,23 +1,70 @@
-use lox_bytecode_vm::{
-    chunk::{Chunk, OpCode},
-    vm::Vm,
+use clap::Parser;
+use lox_bytecode_vm::vm::{InterpretResult, Vm};
+use std::{
+    error::Error,
+    fs,
+    io::{self, Write},
+    path::PathBuf,
+    process,
 };
-use std::env;
 
-fn main() {
-    let debug_flag = match env::args().nth(1) {
-        Some(val) => val == "--debug",
-        None => false,
-    };
-    let mut vm = Vm::new(debug_flag);
-    let mut chunk = Chunk::new();
-    chunk.write_constant(1.2, 1);
-    chunk.write_constant(3.4, 1);
-    chunk.write_chunk(OpCode::Add as u8, 1);
-    chunk.write_constant(5.6, 1);
-    chunk.write_chunk(OpCode::Divide as u8, 1);
-    chunk.write_chunk(OpCode::Negate as u8, 1);
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Optional file path to read a Lox program from
+    path: Option<PathBuf>,
 
-    chunk.write_chunk(OpCode::Return as u8, 2);
-    vm.interpret(&chunk);
+    /// Turn debugging information on
+    #[arg(short, long)]
+    debug: bool,
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+    let vm = Vm::new(args.debug);
+
+    if let Some(file_path) = args.path {
+        run_file(file_path, vm)?;
+    } else {
+        repl(vm)?;
+    }
+    Ok(())
+}
+
+fn repl(mut vm: Vm) -> Result<(), Box<dyn Error>> {
+    let mut buffer = String::new();
+    loop {
+        print!("> ");
+        io::stdout().flush()?;
+
+        match io::stdin().read_line(&mut buffer) {
+            Ok(n) => {
+                // Empty line will have len 1 because it includes new line char.
+                if n == 1 {
+                    break;
+                }
+                vm.interpret(buffer.leak());
+                buffer = String::new();
+            }
+            Err(error) => {
+                eprintln!("Error: {error}");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_file(file_path: PathBuf, mut vm: Vm) -> Result<(), Box<dyn Error>> {
+    let source = fs::read_to_string(&file_path)
+        .expect(&format!("Failed to read file '{}'", file_path.display()));
+
+    let result = vm.interpret(&source);
+
+    match result {
+        InterpretResult::InterpretOk => Ok(()),
+        InterpretResult::InterpretCompileError => process::exit(65),
+        InterpretResult::InterpretRuntimeError => process::exit(70),
+    }
 }
