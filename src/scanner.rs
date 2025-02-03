@@ -7,7 +7,7 @@ pub struct Token<'src> {
     pub line: usize,
 }
 impl<'src> Token<'src> {
-    fn new(token_type: TokenType, lexeme: &'src str, line: usize) -> Self {
+    pub fn new(token_type: TokenType, lexeme: &'src str, line: usize) -> Self {
         Self {
             token_type,
             lexeme,
@@ -67,11 +67,12 @@ pub enum TokenType {
     While,
 
     Error,
+    Eof,
 }
 
 pub struct Scanner<'src> {
     rest: &'src str,
-    line: usize,
+    pub line: usize,
 }
 impl<'src> Scanner<'src> {
     pub fn new(source: &'src str) -> Self {

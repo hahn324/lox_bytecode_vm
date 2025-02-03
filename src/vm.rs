@@ -11,13 +11,13 @@ pub enum InterpretResult {
     InterpretRuntimeError,
 }
 
-pub struct Vm<'c> {
-    chunk: Option<&'c Chunk>,
+pub struct Vm {
+    chunk: Option<Chunk>,
     ip: usize,
     stack: Vec<Value>,
     debug_trace: bool,
 }
-impl<'c> Vm<'c> {
+impl Vm {
     pub fn new(debug_trace: bool) -> Self {
         Self {
             chunk: None,
@@ -28,8 +28,14 @@ impl<'c> Vm<'c> {
     }
 
     pub fn interpret(&mut self, source: &str) -> InterpretResult {
-        compile(source);
-        InterpretResult::InterpretOk
+        match compile(source, self.debug_trace) {
+            Some(chunk) => {
+                self.chunk = Some(chunk);
+                self.ip = 0;
+                self.run()
+            }
+            None => InterpretResult::InterpretCompileError,
+        }
     }
 
     fn run(&mut self) -> InterpretResult {
@@ -43,7 +49,7 @@ impl<'c> Vm<'c> {
             };
         }
 
-        if let Some(chunk) = self.chunk {
+        if let Some(ref chunk) = self.chunk {
             loop {
                 if self.debug_trace {
                     println!("          {:?}", self.stack);
