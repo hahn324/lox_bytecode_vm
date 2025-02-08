@@ -4,6 +4,7 @@ use crate::{
     scanner::{Scanner, Token, TokenType},
     value::Value,
 };
+use std::rc::Rc;
 
 pub fn compile(source: &str, debug_mode: bool) -> Option<Chunk> {
     let scanner = Scanner::new(source);
@@ -44,6 +45,11 @@ impl From<TokenType> for Precedence {
         match value {
             TokenType::Plus | TokenType::Minus => Precedence::Term,
             TokenType::Star | TokenType::Slash => Precedence::Factor,
+            TokenType::BangEqual | TokenType::EqualEqual => Precedence::Equality,
+            TokenType::Greater
+            | TokenType::GreaterEqual
+            | TokenType::Less
+            | TokenType::LessEqual => Precedence::Comparison,
             _ => Precedence::None,
         }
     }
@@ -93,8 +99,10 @@ impl<'src> Parser<'src> {
     fn run_prefix_rule(&mut self, token_type: TokenType) -> bool {
         match token_type {
             TokenType::LeftParen => self.grouping(),
-            TokenType::Minus => self.unary(),
+            TokenType::Minus | TokenType::Bang => self.unary(),
             TokenType::Number => self.number(),
+            TokenType::Nil | TokenType::True | TokenType::False => self.literal(),
+            TokenType::String => self.string(),
             _ => {
                 self.error_at(
                     self.previous.expect("Will always be Some variant."),
@@ -108,9 +116,16 @@ impl<'src> Parser<'src> {
 
     fn run_infix_rule(&mut self, token_type: TokenType) {
         match token_type {
-            TokenType::Plus | TokenType::Minus | TokenType::Star | TokenType::Slash => {
-                self.binary()
-            }
+            TokenType::Plus
+            | TokenType::Minus
+            | TokenType::Star
+            | TokenType::Slash
+            | TokenType::BangEqual
+            | TokenType::EqualEqual
+            | TokenType::Greater
+            | TokenType::GreaterEqual
+            | TokenType::Less
+            | TokenType::LessEqual => self.binary(),
             _ => (),
         }
     }
@@ -145,16 +160,27 @@ impl<'src> Parser<'src> {
     }
 
     fn number(&mut self) {
-        let value = match self.previous {
+        let value = Value::Number(match self.previous {
             Some(ref token) => token.lexeme.parse::<f64>().expect(&format!(
                 "Failed to parse number literal '{}'.",
                 token.lexeme
             )),
             None => {
-                panic!("There should always be a previous Token if Parser::number() is called.")
+                panic!("There was no consumed previous Token when Parser::number() was called.")
             }
-        };
+        });
         self.emit_constant(value);
+    }
+
+    fn string(&mut self) {
+        // Trims the leading and trailing '"' characters from the lexeme to make the String.
+        let string_val = String::from(match self.previous {
+            Some(ref token) => &token.lexeme[1..token.lexeme.len() - 1],
+            None => {
+                panic!("There was no consumed previous Token when Parser::string() was called.")
+            }
+        });
+        self.emit_constant(Value::String(Rc::new(string_val)));
     }
 
     fn unary(&mut self) {
@@ -170,6 +196,7 @@ impl<'src> Parser<'src> {
         // Emit the operator instruction.
         match operator_type {
             TokenType::Minus => self.emit_byte(OpCode::Negate as u8),
+            TokenType::Bang => self.emit_byte(OpCode::Not as u8),
             _ => unreachable!("Expects only tokens that are unary operators."),
         }
     }
@@ -180,11 +207,18 @@ impl<'src> Parser<'src> {
             .as_ref()
             .expect("Expect to have consumed a binary token.")
             .token_type;
+
         let precedence = match operator_type {
             TokenType::Plus | TokenType::Minus => Precedence::Factor,
             TokenType::Star | TokenType::Slash => Precedence::Unary,
+            TokenType::BangEqual | TokenType::EqualEqual => Precedence::Comparison,
+            TokenType::Greater
+            | TokenType::GreaterEqual
+            | TokenType::Less
+            | TokenType::LessEqual => Precedence::Term,
             _ => unreachable!("Expects only tokens that are binary operators."),
         };
+
         self.parse_precedence(precedence);
 
         match operator_type {
@@ -192,7 +226,27 @@ impl<'src> Parser<'src> {
             TokenType::Minus => self.emit_byte(OpCode::Subtract as u8),
             TokenType::Star => self.emit_byte(OpCode::Multiply as u8),
             TokenType::Slash => self.emit_byte(OpCode::Divide as u8),
+            TokenType::BangEqual => self.emit_bytes(OpCode::Equal as u8, OpCode::Not as u8),
+            TokenType::EqualEqual => self.emit_byte(OpCode::Equal as u8),
+            TokenType::Greater => self.emit_byte(OpCode::Greater as u8),
+            TokenType::GreaterEqual => self.emit_bytes(OpCode::Less as u8, OpCode::Not as u8),
+            TokenType::Less => self.emit_byte(OpCode::Less as u8),
+            TokenType::LessEqual => self.emit_bytes(OpCode::Greater as u8, OpCode::Not as u8),
             _ => unreachable!("Expects only tokens that are binary operators."),
+        }
+    }
+
+    fn literal(&mut self) {
+        let token_type = self
+            .previous
+            .as_ref()
+            .expect("Expect to have consumed a literal token.")
+            .token_type;
+        match token_type {
+            TokenType::Nil => self.emit_byte(OpCode::Nil as u8),
+            TokenType::True => self.emit_byte(OpCode::True as u8),
+            TokenType::False => self.emit_byte(OpCode::False as u8),
+            _ => unreachable!(),
         }
     }
 

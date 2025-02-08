@@ -4,11 +4,20 @@ use crate::{
     debug::disassemble_instruction,
     value::Value,
 };
+use std::rc::Rc;
 
 pub enum InterpretResult {
     InterpretOk,
     InterpretCompileError,
     InterpretRuntimeError,
+}
+
+fn is_falsey(value: Value) -> bool {
+    match value {
+        Value::Nil => true,
+        Value::Bool(val) => !val,
+        _ => false,
+    }
 }
 
 pub struct Vm {
@@ -40,11 +49,17 @@ impl Vm {
 
     fn run(&mut self) -> InterpretResult {
         macro_rules! binary_op {
-            ($op:tt) => {
+            ($value_type:path, $op:tt) => {
                 {
                     let b = self.stack.pop().expect("Stack should be non-empty during binary op.");
                     let a = self.stack.pop().expect("Stack should be non-empty during binary op.");
-                    self.stack.push(a $op b);
+                    match (a, b) {
+                        (Value::Number(a_val), Value::Number(b_val)) => self.stack.push($value_type(a_val $op b_val)),
+                        _ => {
+                            self.runtime_error("Operands must be numbers.");
+                            return InterpretResult::InterpretRuntimeError;
+                        }
+                    }
                 }
             };
         }
@@ -64,7 +79,7 @@ impl Vm {
                     }
                     OpCode::Constant => {
                         let constants_idx = chunk.code[self.ip] as usize;
-                        let constant = chunk.constants[constants_idx];
+                        let constant = chunk.constants[constants_idx].clone();
                         self.ip += 1;
                         self.stack.push(constant);
                     }
@@ -73,7 +88,7 @@ impl Vm {
                         let middle_byte = chunk.code[self.ip + 1] as usize;
                         let left_byte = chunk.code[self.ip + 2] as usize;
                         let constants_idx = (right_byte << 16) + (middle_byte << 8) + left_byte;
-                        let constant = chunk.constants[constants_idx];
+                        let constant = chunk.constants[constants_idx].clone();
                         self.ip += 3;
                         self.stack.push(constant);
                     }
@@ -81,17 +96,70 @@ impl Vm {
                         let operand = self
                             .stack
                             .pop()
-                            .expect("Stack should be non-empty during negate op.");
-                        self.stack.push(-operand);
+                            .expect("Stack should be non-empty during NEGATE op.");
+                        match operand {
+                            Value::Number(val) => self.stack.push(Value::Number(-val)),
+                            _ => {
+                                self.runtime_error("Operand must be a number.");
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        }
                     }
-                    OpCode::Add => binary_op!(+),
-                    OpCode::Subtract => binary_op!(-),
-                    OpCode::Multiply => binary_op!(*),
-                    OpCode::Divide => binary_op!(/),
+                    OpCode::Add => {
+                        let b = self
+                            .stack
+                            .pop()
+                            .expect("Stack should be non-empty during binary op.");
+                        let a = self
+                            .stack
+                            .pop()
+                            .expect("Stack should be non-empty during binary op.");
+                        match (a, b) {
+                            (Value::String(a_val), Value::String(b_val)) => self
+                                .stack
+                                .push(Value::String(Rc::new(format!("{a_val}{b_val}")))),
+                            (Value::Number(a_val), Value::Number(b_val)) => {
+                                self.stack.push(Value::Number(a_val + b_val))
+                            }
+                            _ => {
+                                self.runtime_error("Operands must be two numbers or two strings.");
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        }
+                    }
+                    OpCode::Subtract => binary_op!(Value::Number, -),
+                    OpCode::Multiply => binary_op!(Value::Number, *),
+                    OpCode::Divide => binary_op!(Value::Number, /),
+                    OpCode::Nil => self.stack.push(Value::Nil),
+                    OpCode::True => self.stack.push(Value::Bool(true)),
+                    OpCode::False => self.stack.push(Value::Bool(false)),
+                    OpCode::Not => {
+                        let operand = self
+                            .stack
+                            .pop()
+                            .expect("Stack should be non-empty during NOT op.");
+                        self.stack.push(Value::Bool(is_falsey(operand)));
+                    }
+                    OpCode::Equal => {
+                        let a = self.stack.pop().unwrap();
+                        let b = self.stack.pop().unwrap();
+                        self.stack.push(Value::Bool(a.eq(&b)));
+                    }
+                    OpCode::Greater => binary_op!(Value::Bool, >),
+                    OpCode::Less => binary_op!(Value::Bool, <),
                 }
             }
         } else {
             return InterpretResult::InterpretRuntimeError;
         }
+    }
+
+    fn runtime_error(&self, err_msg: &str) {
+        eprintln!("{err_msg}");
+        if let Some(ref chunk) = self.chunk {
+            let line = chunk.get_line(self.ip - 1);
+            eprintln!("[line {line}] in script.");
+        }
+        // self.reset_stack();
     }
 }

@@ -3,14 +3,21 @@ use crate::value::Value;
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u8)]
 pub enum OpCode {
-    Return = 0,
-    Constant = 1,
-    ConstantLong = 2,
-    Negate = 3,
-    Add = 4,
-    Subtract = 5,
-    Multiply = 6,
-    Divide = 7,
+    Return,
+    Constant,
+    ConstantLong,
+    Negate,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Nil,
+    True,
+    False,
+    Not,
+    Equal,
+    Greater,
+    Less,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -23,6 +30,13 @@ impl From<u8> for OpCode {
             5 => OpCode::Subtract,
             6 => OpCode::Multiply,
             7 => OpCode::Divide,
+            8 => OpCode::Nil,
+            9 => OpCode::True,
+            10 => OpCode::False,
+            11 => OpCode::Not,
+            12 => OpCode::Equal,
+            13 => OpCode::Greater,
+            14 => OpCode::Less,
             _ => panic!("Unknown byte code {byte}"),
         }
     }
