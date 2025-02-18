@@ -2,9 +2,8 @@ use crate::{
     chunk::{Chunk, OpCode},
     compiler::compile,
     debug::disassemble_instruction,
-    value::Value,
+    value::{StringInterner, Value},
 };
-use std::rc::Rc;
 
 pub enum InterpretResult {
     InterpretOk,
@@ -25,6 +24,7 @@ pub struct Vm {
     ip: usize,
     stack: Vec<Value>,
     debug_trace: bool,
+    strings: StringInterner,
 }
 impl Vm {
     pub fn new(debug_trace: bool) -> Self {
@@ -33,11 +33,12 @@ impl Vm {
             ip: 0,
             stack: Vec::with_capacity(256),
             debug_trace,
+            strings: StringInterner::default(),
         }
     }
 
     pub fn interpret(&mut self, source: &str) -> InterpretResult {
-        match compile(source, self.debug_trace) {
+        match compile(source, &mut self.strings, self.debug_trace) {
             Some(chunk) => {
                 self.chunk = Some(chunk);
                 self.ip = 0;
@@ -115,9 +116,15 @@ impl Vm {
                             .pop()
                             .expect("Stack should be non-empty during binary op.");
                         match (a, b) {
-                            (Value::String(a_val), Value::String(b_val)) => self
-                                .stack
-                                .push(Value::String(Rc::new(format!("{a_val}{b_val}")))),
+                            (Value::String(a_val), Value::String(b_val)) => {
+                                let new_string = format!(
+                                    "{}{}",
+                                    self.strings.lookup(a_val),
+                                    self.strings.lookup(b_val)
+                                );
+                                let str_id = self.strings.intern(new_string.as_str());
+                                self.stack.push(Value::String(str_id));
+                            }
                             (Value::Number(a_val), Value::Number(b_val)) => {
                                 self.stack.push(Value::Number(a_val + b_val))
                             }

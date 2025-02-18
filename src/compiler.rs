@@ -2,13 +2,12 @@ use crate::{
     chunk::{Chunk, OpCode},
     debug::disassemble_chunk,
     scanner::{Scanner, Token, TokenType},
-    value::Value,
+    value::{StringInterner, Value},
 };
-use std::rc::Rc;
 
-pub fn compile(source: &str, debug_mode: bool) -> Option<Chunk> {
+pub fn compile(source: &str, strings: &mut StringInterner, debug_mode: bool) -> Option<Chunk> {
     let scanner = Scanner::new(source);
-    let mut parser = Parser::new(scanner);
+    let mut parser = Parser::new(scanner, strings);
     parser.advance();
     parser.expression();
     end_compiler(&mut parser, debug_mode);
@@ -55,17 +54,18 @@ impl From<TokenType> for Precedence {
     }
 }
 
-struct Parser<'src> {
+struct Parser<'src, 'vm> {
     current: Option<Token<'src>>,
     previous: Option<Token<'src>>,
     scanner: Scanner<'src>,
     chunk: Chunk,
     had_error: bool,
     panic_mode: bool,
+    strings: &'vm mut StringInterner,
 }
 
-impl<'src> Parser<'src> {
-    fn new(scanner: Scanner<'src>) -> Self {
+impl<'src, 'vm> Parser<'src, 'vm> {
+    fn new(scanner: Scanner<'src>, strings: &'vm mut StringInterner) -> Self {
         Self {
             current: None,
             previous: None,
@@ -73,6 +73,7 @@ impl<'src> Parser<'src> {
             chunk: Chunk::new(),
             had_error: false,
             panic_mode: false,
+            strings,
         }
     }
 
@@ -174,13 +175,14 @@ impl<'src> Parser<'src> {
 
     fn string(&mut self) {
         // Trims the leading and trailing '"' characters from the lexeme to make the String.
-        let string_val = String::from(match self.previous {
+        let str_val = match self.previous {
             Some(ref token) => &token.lexeme[1..token.lexeme.len() - 1],
             None => {
                 panic!("There was no consumed previous Token when Parser::string() was called.")
             }
-        });
-        self.emit_constant(Value::String(Rc::new(string_val)));
+        };
+        let str_id = self.strings.intern(str_val);
+        self.emit_constant(Value::String(str_id));
     }
 
     fn unary(&mut self) {
