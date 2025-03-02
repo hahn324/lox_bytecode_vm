@@ -18,6 +18,14 @@ pub enum OpCode {
     Equal,
     Greater,
     Less,
+    Print,
+    Pop,
+    DefineGlobal,
+    DefineGlobalLong,
+    GetGlobal,
+    GetGlobalLong,
+    SetGlobal,
+    SetGlobalLong,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -37,6 +45,14 @@ impl From<u8> for OpCode {
             12 => OpCode::Equal,
             13 => OpCode::Greater,
             14 => OpCode::Less,
+            15 => OpCode::Print,
+            16 => OpCode::Pop,
+            17 => OpCode::DefineGlobal,
+            18 => OpCode::DefineGlobalLong,
+            19 => OpCode::GetGlobal,
+            20 => OpCode::GetGlobalLong,
+            21 => OpCode::SetGlobal,
+            22 => OpCode::SetGlobalLong,
             _ => panic!("Unknown byte code {byte}"),
         }
     }
@@ -61,15 +77,20 @@ impl Chunk {
         self.add_line(line);
     }
 
-    pub fn write_constant(&mut self, value: Value, line: usize) {
-        let constant_offset = self.add_constant(value);
+    pub fn push_constant_ops(
+        &mut self,
+        constant_offset: usize,
+        line: usize,
+        op: OpCode,
+        op_long: OpCode,
+    ) {
         if constant_offset < 256 {
-            self.code.push(OpCode::Constant as u8);
+            self.code.push(op as u8);
             self.add_line(line);
             self.code.push(constant_offset as u8);
             self.add_line(line);
         } else {
-            self.code.push(OpCode::ConstantLong as u8);
+            self.code.push(op_long as u8);
             self.add_line(line);
             self.code.extend_from_slice(&[
                 (constant_offset >> 16) as u8,

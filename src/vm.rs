@@ -2,8 +2,9 @@ use crate::{
     chunk::{Chunk, OpCode},
     compiler::compile,
     debug::disassemble_instruction,
-    value::{StringInterner, Value},
+    value::{StrId, StringInterner, Value},
 };
+use rustc_hash::FxHashMap;
 
 pub enum InterpretResult {
     InterpretOk,
@@ -25,6 +26,7 @@ pub struct Vm {
     stack: Vec<Value>,
     debug_trace: bool,
     strings: StringInterner,
+    globals: FxHashMap<StrId, Value>,
 }
 impl Vm {
     pub fn new(debug_trace: bool) -> Self {
@@ -34,6 +36,7 @@ impl Vm {
             stack: Vec::with_capacity(256),
             debug_trace,
             strings: StringInterner::default(),
+            globals: FxHashMap::default(),
         }
     }
 
@@ -65,32 +68,25 @@ impl Vm {
             };
         }
 
-        if let Some(ref chunk) = self.chunk {
+        if let Some(chunk) = self.chunk.take() {
             loop {
                 if self.debug_trace {
                     println!("          {:?}", self.stack);
-                    disassemble_instruction(chunk, self.ip);
+                    disassemble_instruction(&chunk, self.ip);
                 }
                 let instruction = chunk.code[self.ip];
                 self.ip += 1;
                 match OpCode::from(instruction) {
                     OpCode::Return => {
-                        println!("{:?}", self.stack.pop());
+                        // Exit interpreter.
                         return InterpretResult::InterpretOk;
                     }
                     OpCode::Constant => {
-                        let constants_idx = chunk.code[self.ip] as usize;
-                        let constant = chunk.constants[constants_idx].clone();
-                        self.ip += 1;
+                        let constant = self.get_constant(&chunk);
                         self.stack.push(constant);
                     }
                     OpCode::ConstantLong => {
-                        let right_byte = chunk.code[self.ip] as usize;
-                        let middle_byte = chunk.code[self.ip + 1] as usize;
-                        let left_byte = chunk.code[self.ip + 2] as usize;
-                        let constants_idx = (right_byte << 16) + (middle_byte << 8) + left_byte;
-                        let constant = chunk.constants[constants_idx].clone();
-                        self.ip += 3;
+                        let constant = self.get_constant_long(&chunk);
                         self.stack.push(constant);
                     }
                     OpCode::Negate => {
@@ -154,11 +150,133 @@ impl Vm {
                     }
                     OpCode::Greater => binary_op!(Value::Bool, >),
                     OpCode::Less => binary_op!(Value::Bool, <),
+                    OpCode::Print => {
+                        if let Some(operand) = self.stack.pop() {
+                            match operand {
+                                Value::Number(val) => println!("{val}"),
+                                Value::Bool(val) => println!("{val}"),
+                                Value::String(str_id) => {
+                                    println!("{}", self.strings.lookup(str_id));
+                                }
+                                Value::Nil => println!("Nil"),
+                            }
+                        }
+                    }
+                    OpCode::Pop => {
+                        self.stack.pop();
+                    }
+                    OpCode::DefineGlobal => {
+                        let constant = self.get_constant(&chunk);
+                        let str_id = match constant {
+                            Value::String(id) => id,
+                            _ => unreachable!("Will only ever be a Value::String variant."),
+                        };
+                        let value = self.stack[self.stack.len() - 1];
+                        self.globals.insert(str_id, value);
+                        self.stack.pop();
+                    }
+                    OpCode::DefineGlobalLong => {
+                        let constant = self.get_constant_long(&chunk);
+                        let str_id = match constant {
+                            Value::String(id) => id,
+                            _ => unreachable!("Will only ever be a Value::String variant."),
+                        };
+                        let value = self.stack[self.stack.len() - 1];
+                        self.globals.insert(str_id, value);
+                        self.stack.pop();
+                    }
+                    OpCode::GetGlobal => {
+                        let constant = self.get_constant(&chunk);
+                        let str_id = match constant {
+                            Value::String(id) => id,
+                            _ => unreachable!("Will only ever be a Value::String variant."),
+                        };
+                        let value = match self.globals.get(&str_id) {
+                            Some(value) => *value,
+                            None => {
+                                let var_name = self.strings.lookup(str_id);
+                                self.runtime_error(&format!("Undefined variable {}.", var_name));
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        };
+                        self.stack.push(value);
+                    }
+                    OpCode::GetGlobalLong => {
+                        let constant = self.get_constant_long(&chunk);
+                        let str_id = match constant {
+                            Value::String(id) => id,
+                            _ => unreachable!("Will only ever be a Value::String variant."),
+                        };
+                        let value = match self.globals.get(&str_id) {
+                            Some(value) => *value,
+                            None => {
+                                let var_name = self.strings.lookup(str_id);
+                                self.runtime_error(&format!("Undefined variable {}.", var_name));
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        };
+                        self.stack.push(value);
+                    }
+                    OpCode::SetGlobal => {
+                        let constant = self.get_constant(&chunk);
+                        let str_id = match constant {
+                            Value::String(id) => id,
+                            _ => unreachable!("Will only ever be a Value::String variant."),
+                        };
+                        let value = self.stack[self.stack.len() - 1];
+                        match self.globals.insert(str_id, value) {
+                            Some(_) => (),
+                            None => {
+                                self.globals.remove(&str_id);
+                                let var_name = self.strings.lookup(str_id);
+                                self.runtime_error(&format!("Undefined variable {}.", var_name));
+                                // NOTE: Value on stack will not get popped since returning before
+                                // OpCode::Pop op for expression statement... Memory leak in REPL?
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        }
+                    }
+                    OpCode::SetGlobalLong => {
+                        let constant = self.get_constant_long(&chunk);
+                        let str_id = match constant {
+                            Value::String(id) => id,
+                            _ => unreachable!("Will only ever be a Value::String variant."),
+                        };
+                        let value = self.stack[self.stack.len() - 1];
+                        match self.globals.insert(str_id, value) {
+                            Some(_) => (),
+                            None => {
+                                self.globals.remove(&str_id);
+                                let var_name = self.strings.lookup(str_id);
+                                self.runtime_error(&format!("Undefined variable {}.", var_name));
+                                // NOTE: Value on stack will not get popped since returning before
+                                // OpCode::Pop op for expression statement... Memory leak in REPL?
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        }
+                    }
                 }
             }
         } else {
             return InterpretResult::InterpretRuntimeError;
         }
+    }
+
+    fn get_constant(&mut self, chunk: &Chunk) -> Value {
+        let constants_idx = chunk.code[self.ip] as usize;
+        let constant = chunk.constants[constants_idx];
+        self.ip += 1;
+        constant
+    }
+
+    fn get_constant_long(&mut self, chunk: &Chunk) -> Value {
+        let right_byte = chunk.code[self.ip] as usize;
+        let middle_byte = chunk.code[self.ip + 1] as usize;
+        let left_byte = chunk.code[self.ip + 2] as usize;
+        let constants_idx = (right_byte << 16) + (middle_byte << 8) + left_byte;
+        let constant = chunk.constants[constants_idx];
+        self.ip += 3;
+        constant
     }
 
     fn runtime_error(&self, err_msg: &str) {

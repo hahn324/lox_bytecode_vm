@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 #[derive(Debug, Clone, PartialEq, Copy, Eq, Hash)]
 pub struct StrId(u32);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Value {
     Number(f64),
     Bool(bool),
