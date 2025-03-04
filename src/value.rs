@@ -9,6 +9,7 @@ pub enum Value {
     Bool(bool),
     String(StrId),
     Nil,
+    Undefined,
 }
 
 impl PartialEq for Value {

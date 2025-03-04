@@ -2,12 +2,13 @@ use crate::{
     chunk::{Chunk, OpCode},
     debug::disassemble_chunk,
     scanner::{Scanner, Token, TokenType},
-    value::{StringInterner, Value},
+    value::Value,
+    vm::Vm,
 };
 
-pub fn compile(source: &str, strings: &mut StringInterner, debug_mode: bool) -> Option<Chunk> {
+pub fn compile(source: &str, vm: &mut Vm, debug_mode: bool) -> Option<Chunk> {
     let scanner = Scanner::new(source);
-    let mut parser = Parser::new(scanner, strings);
+    let mut parser = Parser::new(scanner, vm);
     parser.advance();
     while parser.current.is_some() {
         parser.declaration();
@@ -63,11 +64,11 @@ struct Parser<'src, 'vm> {
     chunk: Chunk,
     had_error: bool,
     panic_mode: bool,
-    strings: &'vm mut StringInterner,
+    vm: &'vm mut Vm,
 }
 
 impl<'src, 'vm> Parser<'src, 'vm> {
-    fn new(scanner: Scanner<'src>, strings: &'vm mut StringInterner) -> Self {
+    fn new(scanner: Scanner<'src>, vm: &'vm mut Vm) -> Self {
         Self {
             current: None,
             previous: None,
@@ -75,7 +76,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             chunk: Chunk::new(),
             had_error: false,
             panic_mode: false,
-            strings,
+            vm,
         }
     }
 
@@ -168,9 +169,16 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn identifier_constant(&mut self, name: Token) -> usize {
-        let str_id = self.strings.intern(name.lexeme);
-        let identifier = Value::String(str_id);
-        self.current_chunk().add_constant(identifier)
+        let str_id = self.vm.strings.intern(name.lexeme);
+        match self.vm.global_names.get(&str_id) {
+            Some(offset) => *offset,
+            None => {
+                let offset = self.vm.global_values.len();
+                self.vm.global_values.push(Value::Undefined);
+                self.vm.global_names.insert(str_id, offset);
+                offset
+            }
+        }
     }
 
     fn parse_variable(&mut self, error_message: &str) -> usize {
@@ -289,7 +297,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                 panic!("There was no consumed previous Token when Parser::string() was called.")
             }
         };
-        let str_id = self.strings.intern(str_val);
+        let str_id = self.vm.strings.intern(str_val);
         self.emit_constant(Value::String(str_id));
     }
 
