@@ -57,6 +57,18 @@ impl From<TokenType> for Precedence {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Local<'src> {
+    name: Token<'src>,
+    depth: i32,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Compiler<'src> {
+    locals: Vec<Local<'src>>,
+    scope_depth: i32,
+}
+
 struct Parser<'src, 'vm> {
     current: Option<Token<'src>>,
     previous: Option<Token<'src>>,
@@ -65,6 +77,7 @@ struct Parser<'src, 'vm> {
     had_error: bool,
     panic_mode: bool,
     vm: &'vm mut Vm,
+    compiler: Compiler<'src>,
 }
 
 impl<'src, 'vm> Parser<'src, 'vm> {
@@ -77,6 +90,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             had_error: false,
             panic_mode: false,
             vm,
+            compiler: Compiler::default(),
         }
     }
 
@@ -181,13 +195,71 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
     }
 
+    fn resolve_local(&mut self, name: Token<'src>) -> Option<usize> {
+        for (idx, local) in self.compiler.locals.iter().enumerate().rev() {
+            if local.name.lexeme == name.lexeme {
+                if local.depth == -1 {
+                    self.error_at(name, "Can't read local variable in its own initializer.");
+                }
+                return Some(idx);
+            }
+        }
+
+        None
+    }
+
+    fn add_local(&mut self, name: Token<'src>) {
+        let local = Local { name, depth: -1 };
+        self.compiler.locals.push(local);
+    }
+
+    fn declare_variable(&mut self) {
+        if self.compiler.scope_depth == 0 {
+            return;
+        }
+
+        let name = self.previous.expect("Just consumed Identifier Token.");
+        let mut var_exists = false;
+        for local in self.compiler.locals.iter().rev() {
+            if local.depth < self.compiler.scope_depth {
+                break;
+            }
+
+            if local.name.lexeme == name.lexeme {
+                var_exists = true;
+                break;
+            }
+        }
+        if var_exists {
+            self.error_at(name, "Already a variable with this name in this scope.");
+        }
+
+        self.add_local(name);
+    }
+
     fn parse_variable(&mut self, error_message: &str) -> usize {
         self.consume(TokenType::Identifier, error_message);
+
+        self.declare_variable();
+        if self.compiler.scope_depth > 0 {
+            return 0;
+        }
+
         let name = self.previous.expect("Just consumed Identifier Token.");
         self.identifier_constant(name)
     }
 
+    fn mark_initialized(&mut self) {
+        let idx = self.compiler.locals.len() - 1;
+        self.compiler.locals[idx].depth = self.compiler.scope_depth;
+    }
+
     fn define_variable(&mut self, global_offset: usize) {
+        if self.compiler.scope_depth > 0 {
+            self.mark_initialized();
+            return;
+        }
+
         let line = match self.previous {
             Some(ref token) => token.line,
             None => 1,
@@ -202,6 +274,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn expression(&mut self) {
         self.parse_precedence(Precedence::Assignment);
+    }
+
+    fn block(&mut self) {
+        while !self.check(TokenType::RightBrace) && self.current.is_some() {
+            self.declaration();
+        }
+
+        self.consume(TokenType::RightBrace, "Expect '}' after block.");
     }
 
     fn var_declaration(&mut self) {
@@ -271,6 +351,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn statement(&mut self) {
         if self.match_token(TokenType::Print) {
             self.print_statement();
+        } else if self.match_token(TokenType::LeftBrace) {
+            self.begin_scope();
+            self.block();
+            self.end_scope();
         } else {
             self.expression_statement();
         }
@@ -301,8 +385,19 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_constant(Value::String(str_id));
     }
 
-    fn named_variable(&mut self, name: Token, can_assign: bool) {
-        let offset = self.identifier_constant(name);
+    fn named_variable(&mut self, name: Token<'src>, can_assign: bool) {
+        let (mut get_op, mut get_op_long) = (OpCode::GetLocal, OpCode::GetLocalLong);
+        let (mut set_op, mut set_op_long) = (OpCode::SetLocal, OpCode::SetLocalLong);
+
+        let offset = match self.resolve_local(name) {
+            Some(idx) => idx,
+            None => {
+                (get_op, get_op_long) = (OpCode::GetGlobal, OpCode::GetGlobalLong);
+                (set_op, set_op_long) = (OpCode::SetGlobal, OpCode::SetGlobalLong);
+                self.identifier_constant(name)
+            }
+        };
+
         let line = match self.previous {
             Some(ref token) => token.line,
             None => 1,
@@ -310,19 +405,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
         if can_assign && self.match_token(TokenType::Equal) {
             self.expression();
-            self.current_chunk().push_constant_ops(
-                offset,
-                line,
-                OpCode::SetGlobal,
-                OpCode::SetGlobalLong,
-            );
+            self.current_chunk()
+                .push_constant_ops(offset, line, set_op, set_op_long);
         } else {
-            self.current_chunk().push_constant_ops(
-                offset,
-                line,
-                OpCode::GetGlobal,
-                OpCode::GetGlobalLong,
-            );
+            self.current_chunk()
+                .push_constant_ops(offset, line, get_op, get_op_long);
         }
     }
 
@@ -464,6 +551,23 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             current.token_type == token_type
         } else {
             false
+        }
+    }
+
+    fn begin_scope(&mut self) {
+        self.compiler.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) {
+        self.compiler.scope_depth -= 1;
+
+        let mut local_count = self.compiler.locals.len();
+        while local_count > 0
+            && self.compiler.locals[local_count - 1].depth > self.compiler.scope_depth
+        {
+            self.emit_byte(OpCode::Pop as u8);
+            self.compiler.locals.pop();
+            local_count -= 1;
         }
     }
 

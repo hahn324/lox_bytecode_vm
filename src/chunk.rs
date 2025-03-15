@@ -26,6 +26,10 @@ pub enum OpCode {
     GetGlobalLong,
     SetGlobal,
     SetGlobalLong,
+    GetLocal,
+    GetLocalLong,
+    SetLocal,
+    SetLocalLong,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -53,6 +57,10 @@ impl From<u8> for OpCode {
             20 => OpCode::GetGlobalLong,
             21 => OpCode::SetGlobal,
             22 => OpCode::SetGlobalLong,
+            23 => OpCode::GetLocal,
+            24 => OpCode::GetLocalLong,
+            25 => OpCode::SetLocal,
+            26 => OpCode::SetLocalLong,
             _ => panic!("Unknown byte code {byte}"),
         }
     }

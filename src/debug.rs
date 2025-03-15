@@ -20,8 +20,10 @@ pub fn disassemble_instruction(chunk: &Chunk, ip: usize) -> usize {
     let instruction = chunk.code[ip];
     match OpCode::from(instruction) {
         OpCode::Return => simple_instruction("OP_RETURN", ip),
-        OpCode::Constant => constant_instruction("OP_CONSTANT", chunk, ip, false),
-        OpCode::ConstantLong => constant_long_instruction("OP_CONSTANTLONG", chunk, ip, false),
+        OpCode::Constant => constant_instruction("OP_CONSTANT", chunk, ip, InstructionType::Load),
+        OpCode::ConstantLong => {
+            constant_long_instruction("OP_CONSTANTLONG", chunk, ip, InstructionType::Load)
+        }
         OpCode::Negate => simple_instruction("OP_NEGATE", ip),
         OpCode::Add => simple_instruction("OP_ADD", ip),
         OpCode::Subtract => simple_instruction("OP_SUBTRACT", ip),
@@ -36,14 +38,32 @@ pub fn disassemble_instruction(chunk: &Chunk, ip: usize) -> usize {
         OpCode::Less => simple_instruction("OP_LESS", ip),
         OpCode::Print => simple_instruction("OP_PRINT", ip),
         OpCode::Pop => simple_instruction("OP_POP", ip),
-        OpCode::DefineGlobal => constant_instruction("OP_DEFINE_GLOBAL", chunk, ip, true),
-        OpCode::DefineGlobalLong => {
-            constant_long_instruction("OP_DEFINE_GLOBAL_LONG", chunk, ip, true)
+        OpCode::DefineGlobal => {
+            constant_instruction("OP_DEFINE_GLOBAL", chunk, ip, InstructionType::Global)
         }
-        OpCode::GetGlobal => constant_instruction("OP_GET_GLOBAL", chunk, ip, true),
-        OpCode::GetGlobalLong => constant_long_instruction("OP_GET_GLOBAL_LONG", chunk, ip, true),
-        OpCode::SetGlobal => constant_instruction("OP_SET_GLOBAL", chunk, ip, true),
-        OpCode::SetGlobalLong => constant_long_instruction("OP_SET_GLOBAL_LONG", chunk, ip, true),
+        OpCode::DefineGlobalLong => {
+            constant_long_instruction("OP_DEFINE_GLOBAL_LONG", chunk, ip, InstructionType::Global)
+        }
+        OpCode::GetGlobal => {
+            constant_instruction("OP_GET_GLOBAL", chunk, ip, InstructionType::Global)
+        }
+        OpCode::GetGlobalLong => {
+            constant_long_instruction("OP_GET_GLOBAL_LONG", chunk, ip, InstructionType::Global)
+        }
+        OpCode::SetGlobal => {
+            constant_instruction("OP_SET_GLOBAL", chunk, ip, InstructionType::Global)
+        }
+        OpCode::SetGlobalLong => {
+            constant_long_instruction("OP_SET_GLOBAL_LONG", chunk, ip, InstructionType::Global)
+        }
+        OpCode::GetLocal => constant_instruction("OP_GET_LOCAL", chunk, ip, InstructionType::Local),
+        OpCode::GetLocalLong => {
+            constant_instruction("OP_GET_LOCAL_LONG", chunk, ip, InstructionType::Local)
+        }
+        OpCode::SetLocal => constant_instruction("OP_SET_LOCAL", chunk, ip, InstructionType::Local),
+        OpCode::SetLocalLong => {
+            constant_instruction("OP_SET_LOCAL_LONG", chunk, ip, InstructionType::Local)
+        }
     }
 }
 
@@ -52,28 +72,48 @@ fn simple_instruction(name: &str, ip: usize) -> usize {
     ip + 1
 }
 
-fn constant_instruction(name: &str, chunk: &Chunk, ip: usize, is_global: bool) -> usize {
+enum InstructionType {
+    Global,
+    Local,
+    Load,
+}
+
+fn constant_instruction(
+    name: &str,
+    chunk: &Chunk,
+    ip: usize,
+    instruction_type: InstructionType,
+) -> usize {
     let offset = chunk.code[ip + 1];
-    if is_global {
-        println!("{name:<16} {offset:4} Global({offset})",);
-    } else {
-        println!(
-            "{name:<16} {offset:4} '{:?}'",
-            chunk.constants[offset as usize]
-        );
+    match instruction_type {
+        InstructionType::Load => {
+            println!(
+                "{name:<16} {offset:4} '{:?}'",
+                chunk.constants[offset as usize]
+            )
+        }
+        InstructionType::Global => println!("{name:<16} Global({offset})",),
+        InstructionType::Local => println!("{name:<16} Local({offset})",),
     }
     ip + 2
 }
 
-fn constant_long_instruction(name: &str, chunk: &Chunk, ip: usize, is_global: bool) -> usize {
+fn constant_long_instruction(
+    name: &str,
+    chunk: &Chunk,
+    ip: usize,
+    instruction_type: InstructionType,
+) -> usize {
     let right_byte = chunk.code[ip + 1] as usize;
     let middle_byte = chunk.code[ip + 2] as usize;
     let left_byte = chunk.code[ip + 3] as usize;
     let offset = (right_byte << 16) + (middle_byte << 8) + left_byte;
-    if is_global {
-        println!("{name:<16} {offset:4} Global({offset})",);
-    } else {
-        println!("{name:<16} {offset:4} '{:?}'", chunk.constants[offset]);
+    match instruction_type {
+        InstructionType::Load => {
+            println!("{name:<16} {offset:4} '{:?}'", chunk.constants[offset])
+        }
+        InstructionType::Global => println!("{name:<16} Global({offset})",),
+        InstructionType::Local => println!("{name:<16} Local({offset})",),
     }
     ip + 4
 }

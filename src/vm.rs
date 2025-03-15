@@ -227,6 +227,26 @@ impl Vm {
                     }
                     self.global_values[offset] = self.stack[self.stack.len() - 1];
                 }
+                OpCode::GetLocal => {
+                    let slot = self.get_offset();
+                    let value = self.stack[slot];
+                    self.stack.push(value);
+                }
+                OpCode::GetLocalLong => {
+                    let slot = self.get_offset_long();
+                    let value = self.stack[slot];
+                    self.stack.push(value);
+                }
+                OpCode::SetLocal => {
+                    let slot = self.get_offset();
+                    let value = self.stack[self.stack.len() - 1];
+                    self.stack[slot] = value;
+                }
+                OpCode::SetLocalLong => {
+                    let slot = self.get_offset_long();
+                    let value = self.stack[self.stack.len() - 1];
+                    self.stack[slot] = value;
+                }
             }
         }
     }
