@@ -33,6 +33,7 @@ pub enum TokenType {
     Minus,
     Plus,
     Semicolon,
+    Colon,
     Slash,
     Star,
     // One or two character tokens.
@@ -65,6 +66,10 @@ pub enum TokenType {
     True,
     Var,
     While,
+    Switch,
+    Case,
+    Default,
+    Continue,
 
     Error,
     Eof,
@@ -116,6 +121,7 @@ impl<'src> Iterator for Scanner<'src> {
                 '{' => return Some(Token::new(TokenType::LeftBrace, c_str, self.line)),
                 '}' => return Some(Token::new(TokenType::RightBrace, c_str, self.line)),
                 ';' => return Some(Token::new(TokenType::Semicolon, c_str, self.line)),
+                ':' => return Some(Token::new(TokenType::Colon, c_str, self.line)),
                 ',' => return Some(Token::new(TokenType::Comma, c_str, self.line)),
                 '.' => return Some(Token::new(TokenType::Dot, c_str, self.line)),
                 '-' => return Some(Token::new(TokenType::Minus, c_str, self.line)),
@@ -230,6 +236,10 @@ impl<'src> Iterator for Scanner<'src> {
                         "true" => TokenType::True,
                         "var" => TokenType::Var,
                         "while" => TokenType::While,
+                        "switch" => TokenType::Switch,
+                        "case" => TokenType::Case,
+                        "default" => TokenType::Default,
+                        "continue" => TokenType::Continue,
                         _ => TokenType::Identifier,
                     };
 

@@ -83,7 +83,7 @@ impl Vm {
                     return InterpretResult::InterpretOk;
                 }
                 OpCode::Constant => {
-                    let offset = self.get_offset();
+                    let offset = self.get_offset_short();
                     let constant = self.chunk.constants[offset];
                     self.stack.push(constant);
                 }
@@ -170,7 +170,7 @@ impl Vm {
                     self.stack.pop();
                 }
                 OpCode::DefineGlobal => {
-                    let offset = self.get_offset();
+                    let offset = self.get_offset_short();
                     self.global_values[offset] = self.stack.pop().expect(
                         "Stack pop will always return Some variant when defining a global.",
                     );
@@ -182,7 +182,7 @@ impl Vm {
                     );
                 }
                 OpCode::GetGlobal => {
-                    let offset = self.get_offset();
+                    let offset = self.get_offset_short();
                     let value = self.global_values[offset];
                     match value {
                         Value::Undefined => {
@@ -206,7 +206,7 @@ impl Vm {
                     self.stack.push(value);
                 }
                 OpCode::SetGlobal => {
-                    let offset = self.get_offset();
+                    let offset = self.get_offset_short();
                     match self.global_values[offset] {
                         Value::Undefined => {
                             self.undefined_global_variable(offset);
@@ -214,7 +214,7 @@ impl Vm {
                         }
                         _ => (),
                     }
-                    self.global_values[offset] = self.stack[self.stack.len() - 1];
+                    self.global_values[offset] = self.peek();
                 }
                 OpCode::SetGlobalLong => {
                     let offset = self.get_offset_long();
@@ -225,10 +225,10 @@ impl Vm {
                         }
                         _ => (),
                     }
-                    self.global_values[offset] = self.stack[self.stack.len() - 1];
+                    self.global_values[offset] = self.peek();
                 }
                 OpCode::GetLocal => {
-                    let slot = self.get_offset();
+                    let slot = self.get_offset_short();
                     let value = self.stack[slot];
                     self.stack.push(value);
                 }
@@ -238,30 +238,53 @@ impl Vm {
                     self.stack.push(value);
                 }
                 OpCode::SetLocal => {
-                    let slot = self.get_offset();
-                    let value = self.stack[self.stack.len() - 1];
+                    let slot = self.get_offset_short();
+                    let value = self.peek();
                     self.stack[slot] = value;
                 }
                 OpCode::SetLocalLong => {
                     let slot = self.get_offset_long();
-                    let value = self.stack[self.stack.len() - 1];
+                    let value = self.peek();
                     self.stack[slot] = value;
                 }
+                OpCode::JumpIfFalse => {
+                    let offset = self.get_offset_medium();
+                    if is_falsey(self.peek()) {
+                        self.ip += offset;
+                    }
+                }
+                OpCode::Jump => self.ip += self.get_offset_medium(),
+                OpCode::Loop => self.ip -= self.get_offset_medium(),
             }
         }
     }
 
-    fn get_offset(&mut self) -> usize {
+    fn peek(&self) -> Value {
+        self.stack[self.stack.len() - 1]
+    }
+
+    /// Reads 1 byte offset operand.
+    fn get_offset_short(&mut self) -> usize {
         let offset = self.chunk.code[self.ip] as usize;
         self.ip += 1;
         offset
     }
 
+    /// Reads 2 byte offset operand.
+    fn get_offset_medium(&mut self) -> usize {
+        let left_byte = self.chunk.code[self.ip] as usize;
+        let right_byte = self.chunk.code[self.ip + 1] as usize;
+        let offset = (left_byte << 8) + right_byte;
+        self.ip += 2;
+        offset
+    }
+
+    /// Reads 3 byte offset operand.
     fn get_offset_long(&mut self) -> usize {
-        let right_byte = self.chunk.code[self.ip] as usize;
+        let left_byte = self.chunk.code[self.ip] as usize;
         let middle_byte = self.chunk.code[self.ip + 1] as usize;
-        let left_byte = self.chunk.code[self.ip + 2] as usize;
-        let offset = (right_byte << 16) + (middle_byte << 8) + left_byte;
+        let right_byte = self.chunk.code[self.ip + 2] as usize;
+        let offset = (left_byte << 16) + (middle_byte << 8) + right_byte;
         self.ip += 3;
         offset
     }

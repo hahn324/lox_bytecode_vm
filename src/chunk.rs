@@ -30,6 +30,9 @@ pub enum OpCode {
     GetLocalLong,
     SetLocal,
     SetLocalLong,
+    JumpIfFalse,
+    Jump,
+    Loop,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -61,6 +64,9 @@ impl From<u8> for OpCode {
             24 => OpCode::GetLocalLong,
             25 => OpCode::SetLocal,
             26 => OpCode::SetLocalLong,
+            27 => OpCode::JumpIfFalse,
+            28 => OpCode::Jump,
+            29 => OpCode::Loop,
             _ => panic!("Unknown byte code {byte}"),
         }
     }
