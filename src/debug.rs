@@ -67,6 +67,7 @@ pub fn disassemble_instruction(chunk: &Chunk, ip: usize) -> usize {
         OpCode::JumpIfFalse => jump_instruction("OP_JUMP_IF_FALSE", false, chunk, ip),
         OpCode::Jump => jump_instruction("OP_JUMP", false, chunk, ip),
         OpCode::Loop => jump_instruction("OP_LOOP", true, chunk, ip),
+        OpCode::Call => offset_instruction("OP_CALL", chunk, ip, InstructionType::Call),
     }
 }
 
@@ -79,6 +80,7 @@ enum InstructionType {
     Global,
     Local,
     Load,
+    Call,
 }
 
 fn offset_instruction(
@@ -97,6 +99,7 @@ fn offset_instruction(
         }
         InstructionType::Global => println!("{name:<16} Global({offset})",),
         InstructionType::Local => println!("{name:<16} Local({offset})",),
+        InstructionType::Call => println!("{name:<16} {offset:4}",),
     }
     ip + 2
 }
@@ -113,10 +116,11 @@ fn offset_long_instruction(
     let offset = (left_byte << 16) + (middle_byte << 8) + right_byte;
     match instruction_type {
         InstructionType::Load => {
-            println!("{name:<16} {ip:4} '{:?}'", chunk.constants[offset])
+            println!("{name:<16} {offset:4} '{:?}'", chunk.constants[offset])
         }
         InstructionType::Global => println!("{name:<16} {ip:4} Global({offset})",),
         InstructionType::Local => println!("{name:<16} {ip:4} Local({offset})",),
+        InstructionType::Call => println!("{name:<16} {offset:4}",),
     }
     ip + 4
 }

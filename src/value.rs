@@ -1,15 +1,46 @@
+use crate::chunk::Chunk;
 use rustc_hash::FxHashMap;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Copy, Eq, Hash)]
 pub struct StrId(u32);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
+pub struct LoxFunction {
+    pub arity: u8,
+    pub chunk: Chunk,
+    pub name: Option<StrId>,
+}
+
+impl LoxFunction {
+    pub fn new(name: Option<StrId>) -> Self {
+        Self {
+            arity: 0,
+            chunk: Chunk::new(),
+            name,
+        }
+    }
+}
+
+impl Default for LoxFunction {
+    fn default() -> Self {
+        Self {
+            arity: 0,
+            chunk: Chunk::new(),
+            name: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Number(f64),
     Bool(bool),
     String(StrId),
     Nil,
     Undefined,
+    Function(Rc<LoxFunction>),
+    Native(fn(u8, usize) -> Value),
 }
 
 impl PartialEq for Value {
@@ -26,7 +57,7 @@ impl PartialEq for Value {
 
 #[derive(Default)]
 pub struct StringInterner {
-    id_map: FxHashMap<String, StrId>,
+    pub id_map: FxHashMap<String, StrId>,
     vec: Vec<String>,
 }
 

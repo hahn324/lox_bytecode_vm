@@ -33,6 +33,7 @@ pub enum OpCode {
     JumpIfFalse,
     Jump,
     Loop,
+    Call,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -67,11 +68,13 @@ impl From<u8> for OpCode {
             27 => OpCode::JumpIfFalse,
             28 => OpCode::Jump,
             29 => OpCode::Loop,
+            30 => OpCode::Call,
             _ => panic!("Unknown byte code {byte}"),
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Chunk {
     pub code: Vec<u8>,
     pub constants: Vec<Value>,
@@ -91,25 +94,25 @@ impl Chunk {
         self.add_line(line);
     }
 
-    pub fn push_constant_ops(
+    pub fn push_val_offset_op(
         &mut self,
-        constant_offset: usize,
+        val_offset: usize,
         line: usize,
         op: OpCode,
         op_long: OpCode,
     ) {
-        if constant_offset < 256 {
+        if val_offset < 256 {
             self.code.push(op as u8);
             self.add_line(line);
-            self.code.push(constant_offset as u8);
+            self.code.push(val_offset as u8);
             self.add_line(line);
         } else {
             self.code.push(op_long as u8);
             self.add_line(line);
             self.code.extend_from_slice(&[
-                (constant_offset >> 16) as u8,
-                ((constant_offset >> 8) & 0xff) as u8,
-                (constant_offset & 0xff) as u8,
+                (val_offset >> 16) as u8,
+                ((val_offset >> 8) & 0xff) as u8,
+                (val_offset & 0xff) as u8,
             ]);
             self.add_line(line);
             self.add_line(line);
