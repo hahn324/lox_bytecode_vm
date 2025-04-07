@@ -1,15 +1,17 @@
 use crate::chunk::{Chunk, OpCode};
+use crate::value::Value;
+use crate::vm::Vm;
 
-pub fn disassemble_chunk(chunk: &Chunk, name: &str) {
+pub fn disassemble_chunk(chunk: &Chunk, name: &str, vm: &Vm) {
     println!("== {name} ==");
 
     let mut ip = 0;
     while ip < chunk.code.len() {
-        ip = disassemble_instruction(chunk, ip);
+        ip = disassemble_instruction(chunk, ip, vm);
     }
 }
 
-pub fn disassemble_instruction(chunk: &Chunk, ip: usize) -> usize {
+pub fn disassemble_instruction(chunk: &Chunk, ip: usize, vm: &Vm) -> usize {
     print!("{ip:04} ");
     if ip > 0 && chunk.get_line(ip) == chunk.get_line(ip - 1) {
         print!("   | ");
@@ -20,9 +22,9 @@ pub fn disassemble_instruction(chunk: &Chunk, ip: usize) -> usize {
     let instruction = chunk.code[ip];
     match OpCode::from(instruction) {
         OpCode::Return => simple_instruction("OP_RETURN", ip),
-        OpCode::Constant => offset_instruction("OP_CONSTANT", chunk, ip, InstructionType::Load),
+        OpCode::Constant => offset_instruction("OP_CONSTANT", chunk, ip, InstructionType::Load, vm),
         OpCode::ConstantLong => {
-            offset_long_instruction("OP_CONSTANTLONG", chunk, ip, InstructionType::Load)
+            offset_long_instruction("OP_CONSTANTLONG", chunk, ip, InstructionType::Load, vm)
         }
         OpCode::Negate => simple_instruction("OP_NEGATE", ip),
         OpCode::Add => simple_instruction("OP_ADD", ip),
@@ -39,35 +41,49 @@ pub fn disassemble_instruction(chunk: &Chunk, ip: usize) -> usize {
         OpCode::Print => simple_instruction("OP_PRINT", ip),
         OpCode::Pop => simple_instruction("OP_POP", ip),
         OpCode::DefineGlobal => {
-            offset_instruction("OP_DEFINE_GLOBAL", chunk, ip, InstructionType::Global)
+            offset_instruction("OP_DEFINE_GLOBAL", chunk, ip, InstructionType::Global, vm)
         }
-        OpCode::DefineGlobalLong => {
-            offset_long_instruction("OP_DEFINE_GLOBAL_LONG", chunk, ip, InstructionType::Global)
-        }
+        OpCode::DefineGlobalLong => offset_long_instruction(
+            "OP_DEFINE_GLOBAL_LONG",
+            chunk,
+            ip,
+            InstructionType::Global,
+            vm,
+        ),
         OpCode::GetGlobal => {
-            offset_instruction("OP_GET_GLOBAL", chunk, ip, InstructionType::Global)
+            offset_instruction("OP_GET_GLOBAL", chunk, ip, InstructionType::Global, vm)
         }
         OpCode::GetGlobalLong => {
-            offset_long_instruction("OP_GET_GLOBAL_LONG", chunk, ip, InstructionType::Global)
+            offset_long_instruction("OP_GET_GLOBAL_LONG", chunk, ip, InstructionType::Global, vm)
         }
         OpCode::SetGlobal => {
-            offset_instruction("OP_SET_GLOBAL", chunk, ip, InstructionType::Global)
+            offset_instruction("OP_SET_GLOBAL", chunk, ip, InstructionType::Global, vm)
         }
         OpCode::SetGlobalLong => {
-            offset_long_instruction("OP_SET_GLOBAL_LONG", chunk, ip, InstructionType::Global)
+            offset_long_instruction("OP_SET_GLOBAL_LONG", chunk, ip, InstructionType::Global, vm)
         }
-        OpCode::GetLocal => offset_instruction("OP_GET_LOCAL", chunk, ip, InstructionType::Local),
+        OpCode::GetLocal => {
+            offset_instruction("OP_GET_LOCAL", chunk, ip, InstructionType::Local, vm)
+        }
         OpCode::GetLocalLong => {
-            offset_instruction("OP_GET_LOCAL_LONG", chunk, ip, InstructionType::Local)
+            offset_instruction("OP_GET_LOCAL_LONG", chunk, ip, InstructionType::Local, vm)
         }
-        OpCode::SetLocal => offset_instruction("OP_SET_LOCAL", chunk, ip, InstructionType::Local),
+        OpCode::SetLocal => {
+            offset_instruction("OP_SET_LOCAL", chunk, ip, InstructionType::Local, vm)
+        }
         OpCode::SetLocalLong => {
-            offset_instruction("OP_SET_LOCAL_LONG", chunk, ip, InstructionType::Local)
+            offset_instruction("OP_SET_LOCAL_LONG", chunk, ip, InstructionType::Local, vm)
         }
         OpCode::JumpIfFalse => jump_instruction("OP_JUMP_IF_FALSE", false, chunk, ip),
         OpCode::Jump => jump_instruction("OP_JUMP", false, chunk, ip),
         OpCode::Loop => jump_instruction("OP_LOOP", true, chunk, ip),
-        OpCode::Call => offset_instruction("OP_CALL", chunk, ip, InstructionType::Call),
+        OpCode::Call => offset_instruction("OP_CALL", chunk, ip, InstructionType::Call, vm),
+        OpCode::Closure => {
+            offset_instruction("OP_CLOSURE", chunk, ip, InstructionType::Closure, vm)
+        }
+        OpCode::ClosureLong => {
+            offset_instruction("OP_CLOSURE_LONG", chunk, ip, InstructionType::Closure, vm)
+        }
     }
 }
 
@@ -81,6 +97,7 @@ enum InstructionType {
     Local,
     Load,
     Call,
+    Closure,
 }
 
 fn offset_instruction(
@@ -88,19 +105,24 @@ fn offset_instruction(
     chunk: &Chunk,
     ip: usize,
     instruction_type: InstructionType,
+    vm: &Vm,
 ) -> usize {
-    let offset = chunk.code[ip + 1];
+    let offset = chunk.code[ip + 1] as usize;
+    print!("{name:<16} {offset:4} '");
     match instruction_type {
-        InstructionType::Load => {
-            println!(
-                "{name:<16} {offset:4} '{:?}'",
-                chunk.constants[offset as usize]
-            )
+        InstructionType::Load => vm.print_value(&chunk.constants[offset]),
+        InstructionType::Global => {
+            for (key, val) in vm.global_names.iter() {
+                if *val == offset {
+                    vm.print_value(&Value::String(*key));
+                    break;
+                }
+            }
         }
-        InstructionType::Global => println!("{name:<16} Global({offset})",),
-        InstructionType::Local => println!("{name:<16} Local({offset})",),
-        InstructionType::Call => println!("{name:<16} {offset:4}",),
+        InstructionType::Local | InstructionType::Call => (),
+        InstructionType::Closure => vm.print_value(&chunk.constants[offset]),
     }
+    print!("'\n");
     ip + 2
 }
 
@@ -109,19 +131,27 @@ fn offset_long_instruction(
     chunk: &Chunk,
     ip: usize,
     instruction_type: InstructionType,
+    vm: &Vm,
 ) -> usize {
     let left_byte = chunk.code[ip + 1] as usize;
     let middle_byte = chunk.code[ip + 2] as usize;
     let right_byte = chunk.code[ip + 3] as usize;
     let offset = (left_byte << 16) + (middle_byte << 8) + right_byte;
+    print!("{name:<16} {offset:4} '");
     match instruction_type {
-        InstructionType::Load => {
-            println!("{name:<16} {offset:4} '{:?}'", chunk.constants[offset])
+        InstructionType::Load => vm.print_value(&chunk.constants[offset]),
+        InstructionType::Global => {
+            for (key, val) in vm.global_names.iter() {
+                if *val == offset {
+                    vm.print_value(&Value::String(*key));
+                    break;
+                }
+            }
         }
-        InstructionType::Global => println!("{name:<16} {ip:4} Global({offset})",),
-        InstructionType::Local => println!("{name:<16} {ip:4} Local({offset})",),
-        InstructionType::Call => println!("{name:<16} {offset:4}",),
+        InstructionType::Local | InstructionType::Call => (),
+        InstructionType::Closure => vm.print_value(&chunk.constants[offset]),
     }
+    print!("'\n");
     ip + 4
 }
 

@@ -34,6 +34,8 @@ pub enum OpCode {
     Jump,
     Loop,
     Call,
+    Closure,
+    ClosureLong,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -69,6 +71,8 @@ impl From<u8> for OpCode {
             28 => OpCode::Jump,
             29 => OpCode::Loop,
             30 => OpCode::Call,
+            31 => OpCode::Closure,
+            32 => OpCode::ClosureLong,
             _ => panic!("Unknown byte code {byte}"),
         }
     }

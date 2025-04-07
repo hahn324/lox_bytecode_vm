@@ -33,6 +33,11 @@ impl Default for LoxFunction {
 }
 
 #[derive(Debug, Clone)]
+pub struct LoxClosure {
+    pub function: Rc<LoxFunction>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Number(f64),
     Bool(bool),
@@ -40,7 +45,8 @@ pub enum Value {
     Nil,
     Undefined,
     Function(Rc<LoxFunction>),
-    Native(fn(u8, usize) -> Value),
+    Native(fn(u8, usize) -> Value, u8),
+    Closure(LoxClosure),
 }
 
 impl PartialEq for Value {

@@ -2,7 +2,7 @@ use crate::{
     chunk::OpCode,
     compiler::compile,
     debug::disassemble_instruction,
-    value::{LoxFunction, StrId, StringInterner, Value},
+    value::{LoxClosure, StrId, StringInterner, Value},
 };
 use rustc_hash::FxHashMap;
 use std::rc::Rc;
@@ -25,9 +25,9 @@ fn is_falsey(value: Value) -> bool {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct CallFrame {
-    function: Rc<LoxFunction>,
+    closure: LoxClosure,
     ip: usize,
     frame_ptr: usize,
 }
@@ -55,7 +55,7 @@ impl Vm {
             global_values: Vec::new(),
         };
         // Initialize global native functions
-        vm.define_native("clock", clock_native);
+        vm.define_native("clock", clock_native, 0);
 
         vm
     }
@@ -63,13 +63,12 @@ impl Vm {
     pub fn interpret(&mut self, source: &str) -> InterpretResult {
         match compile(source, self, self.debug_trace) {
             Some(function) => {
-                if self.debug_trace {
-                    println!("== String Map ==");
-                    println!("{:?}", self.strings.id_map);
-                }
                 self.push(Value::Function(Rc::clone(&function)));
+                let closure = LoxClosure { function };
+                self.pop();
+                self.push(Value::Closure(closure.clone()));
                 self.frames[0] = Some(CallFrame {
-                    function,
+                    closure,
                     ip: 0,
                     frame_ptr: 0,
                 });
@@ -113,10 +112,19 @@ impl Vm {
 
         loop {
             if self.debug_trace {
-                println!("          {:?}", &self.stack[1..self.stack_count]);
-                disassemble_instruction(&current_frame.function.chunk, current_frame.ip);
+                print!("[");
+                for idx in 0..self.stack_count {
+                    self.print_value(&self.stack[idx]);
+                    print!(", ");
+                }
+                println!("]");
+                disassemble_instruction(
+                    &current_frame.closure.function.chunk,
+                    current_frame.ip,
+                    &self,
+                );
             }
-            let instruction = current_frame.function.chunk.code[current_frame.ip];
+            let instruction = current_frame.closure.function.chunk.code[current_frame.ip];
             current_frame.ip += 1;
             match OpCode::from(instruction) {
                 OpCode::Return => {
@@ -135,12 +143,12 @@ impl Vm {
                 }
                 OpCode::Constant => {
                     let offset = Vm::get_offset_short(&mut current_frame);
-                    let constant = current_frame.function.chunk.constants[offset].clone();
+                    let constant = current_frame.closure.function.chunk.constants[offset].clone();
                     self.push(constant);
                 }
                 OpCode::ConstantLong => {
                     let offset = Vm::get_offset_long(&mut current_frame);
-                    let constant = current_frame.function.chunk.constants[offset].clone();
+                    let constant = current_frame.closure.function.chunk.constants[offset].clone();
                     self.push(constant);
                 }
                 OpCode::Negate => {
@@ -195,22 +203,11 @@ impl Vm {
                 }
                 OpCode::Greater => binary_op!(current_frame, Value::Bool, >),
                 OpCode::Less => binary_op!(current_frame, Value::Bool, <),
-                OpCode::Print => match self.pop() {
-                    Value::Number(val) => println!("{val}"),
-                    Value::Bool(val) => println!("{val}"),
-                    Value::String(str_id) => {
-                        println!("{}", self.strings.lookup(str_id));
-                    }
-                    Value::Nil => println!("Nil"),
-                    Value::Undefined => println!("Undefined"),
-                    Value::Function(lox_fun) => match lox_fun.name {
-                        Some(name_id) => {
-                            println!("<fn {}>", self.strings.lookup(name_id))
-                        }
-                        None => println!("<script>"),
-                    },
-                    Value::Native(_) => println!("<native fn>"),
-                },
+                OpCode::Print => {
+                    let value = self.pop();
+                    self.print_value(&value);
+                    print!("\n");
+                }
                 OpCode::Pop => {
                     self.pop();
                 }
@@ -309,7 +306,50 @@ impl Vm {
                             .expect("Will be new CallFrame.");
                     }
                 }
+                OpCode::Closure => {
+                    let offset = Vm::get_offset_short(&mut current_frame);
+                    let lox_fun = current_frame.closure.function.chunk.constants[offset].clone();
+                    let closure = match lox_fun {
+                        Value::Function(function) => LoxClosure { function },
+                        _ => unreachable!("Will always be Value::Function variant."),
+                    };
+                    self.push(Value::Closure(closure));
+                }
+                OpCode::ClosureLong => {
+                    let offset = Vm::get_offset_long(&mut current_frame);
+                    let lox_fun = current_frame.closure.function.chunk.constants[offset].clone();
+                    let closure = match lox_fun {
+                        Value::Function(function) => LoxClosure { function },
+                        _ => unreachable!("Will always be Value::Function variant."),
+                    };
+                    self.push(Value::Closure(closure));
+                }
             }
+        }
+    }
+
+    pub fn print_value(&self, value: &Value) {
+        match value {
+            Value::Number(val) => print!("{val}"),
+            Value::Bool(val) => print!("{val}"),
+            Value::String(str_id) => {
+                print!("{}", self.strings.lookup(*str_id));
+            }
+            Value::Nil => print!("Nil"),
+            Value::Undefined => print!("Undefined"),
+            Value::Function(lox_fun) => match lox_fun.name {
+                Some(name_id) => {
+                    print!("<fn {}>", self.strings.lookup(name_id))
+                }
+                None => print!("<script>"),
+            },
+            Value::Native(_, _) => print!("<native fn>"),
+            Value::Closure(closure) => match closure.function.name {
+                Some(name_id) => {
+                    print!("<fn {}>", self.strings.lookup(name_id))
+                }
+                None => print!("<script>"),
+            },
         }
     }
 
@@ -317,16 +357,14 @@ impl Vm {
         self.stack[self.stack_count - 1 - offset].clone()
     }
 
-    fn call(
-        &mut self,
-        function: Rc<LoxFunction>,
-        arg_count: u8,
-        current_frame: &CallFrame,
-    ) -> bool {
-        if arg_count != function.arity {
+    fn call(&mut self, closure: LoxClosure, arg_count: u8, current_frame: &CallFrame) -> bool {
+        if arg_count != closure.function.arity {
             self.runtime_error(
                 current_frame,
-                &format!("Expected {} arguments but got {arg_count}", function.arity),
+                &format!(
+                    "Expected {} arguments but got {arg_count}.",
+                    closure.function.arity
+                ),
             );
             return false;
         }
@@ -337,7 +375,7 @@ impl Vm {
         }
 
         let frame = CallFrame {
-            function,
+            closure,
             ip: 0,
             frame_ptr: self.stack_count - arg_count as usize - 1,
         };
@@ -348,8 +386,15 @@ impl Vm {
 
     fn call_value(&mut self, callee: Value, arg_count: u8, current_frame: &CallFrame) -> bool {
         match callee {
-            Value::Function(lox_fun) => self.call(lox_fun, arg_count, current_frame),
-            Value::Native(native_fn) => {
+            Value::Closure(lox_closure) => self.call(lox_closure, arg_count, current_frame),
+            Value::Native(native_fn, arity) => {
+                if arg_count != arity {
+                    self.runtime_error(
+                        current_frame,
+                        &format!("Expected {arity} arguments but got {arg_count}."),
+                    );
+                    return false;
+                }
                 let result = native_fn(arg_count, self.stack_count - arg_count as usize);
                 self.stack_count -= arg_count as usize + 1;
                 self.push(result);
@@ -364,15 +409,15 @@ impl Vm {
 
     /// Reads 1 byte offset operand.
     fn get_offset_short(frame: &mut CallFrame) -> usize {
-        let offset = frame.function.chunk.code[frame.ip] as usize;
+        let offset = frame.closure.function.chunk.code[frame.ip] as usize;
         frame.ip += 1;
         offset
     }
 
     /// Reads 2 byte offset operand.
     fn get_offset_medium(frame: &mut CallFrame) -> usize {
-        let left_byte = frame.function.chunk.code[frame.ip] as usize;
-        let right_byte = frame.function.chunk.code[frame.ip + 1] as usize;
+        let left_byte = frame.closure.function.chunk.code[frame.ip] as usize;
+        let right_byte = frame.closure.function.chunk.code[frame.ip + 1] as usize;
         let offset = (left_byte << 8) + right_byte;
         frame.ip += 2;
         offset
@@ -380,9 +425,9 @@ impl Vm {
 
     /// Reads 3 byte offset operand.
     fn get_offset_long(frame: &mut CallFrame) -> usize {
-        let left_byte = frame.function.chunk.code[frame.ip] as usize;
-        let middle_byte = frame.function.chunk.code[frame.ip + 1] as usize;
-        let right_byte = frame.function.chunk.code[frame.ip + 2] as usize;
+        let left_byte = frame.closure.function.chunk.code[frame.ip] as usize;
+        let middle_byte = frame.closure.function.chunk.code[frame.ip + 1] as usize;
+        let right_byte = frame.closure.function.chunk.code[frame.ip + 2] as usize;
         let offset = (left_byte << 16) + (middle_byte << 8) + right_byte;
         frame.ip += 3;
         offset
@@ -393,8 +438,8 @@ impl Vm {
 
         for frame_idx in (0..self.frame_count).rev() {
             let frame = self.frames[frame_idx].as_ref().unwrap_or(current_frame);
-            let line = frame.function.chunk.get_line(frame.ip - 1);
-            let name = match frame.function.name {
+            let line = frame.closure.function.chunk.get_line(frame.ip - 1);
+            let name = match frame.closure.function.name {
                 Some(str_id) => &format!("{}()", self.strings.lookup(str_id)),
                 None => "script",
             };
@@ -403,11 +448,11 @@ impl Vm {
         self.reset_stack();
     }
 
-    fn define_native(&mut self, name: &str, function: fn(u8, usize) -> Value) {
+    fn define_native(&mut self, name: &str, function: fn(u8, usize) -> Value, arity: u8) {
         let str_id = self.strings.intern(name);
         self.push(Value::String(str_id));
         let globals_slot = self.global_values.len();
-        self.global_values.push(Value::Native(function));
+        self.global_values.push(Value::Native(function, arity));
         self.global_names.insert(str_id, globals_slot);
         self.pop();
     }
@@ -420,7 +465,10 @@ impl Vm {
         for (str_id, val_offset) in self.global_names.iter() {
             if offset == *val_offset {
                 let var_name = self.strings.lookup(*str_id);
-                self.runtime_error(current_frame, &format!("Undefined variable {}.", var_name));
+                self.runtime_error(
+                    current_frame,
+                    &format!("Undefined variable '{}'.", var_name),
+                );
                 return;
             }
         }

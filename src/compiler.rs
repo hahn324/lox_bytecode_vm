@@ -32,7 +32,7 @@ fn end_compiler(parser: &mut Parser) -> Option<Rc<LoxFunction>> {
                     Some(name_id) => parser.vm.strings.lookup(name_id),
                     None => "<script>",
                 };
-                disassemble_chunk(current_chunk, name);
+                disassemble_chunk(current_chunk, name, &parser.vm);
             }
             let fun = compiler.function.clone();
             parser.compiler = compiler.enclosing;
@@ -433,7 +433,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.block();
 
         if let Some(lox_function) = end_compiler(self) {
-            self.emit_constant(Value::Function(lox_function));
+            self.add_constant_and_emit(
+                Value::Function(lox_function),
+                OpCode::Closure,
+                OpCode::ClosureLong,
+            );
         }
     }
 
@@ -721,7 +725,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                 panic!("There was no consumed previous Token when Parser::number() was called.")
             }
         });
-        self.emit_constant(value);
+        self.add_constant_and_emit(value, OpCode::Constant, OpCode::ConstantLong);
     }
 
     fn string(&mut self) {
@@ -733,7 +737,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
         };
         let str_id = self.vm.strings.intern(str_val);
-        self.emit_constant(Value::String(str_id));
+        self.add_constant_and_emit(
+            Value::String(str_id),
+            OpCode::Constant,
+            OpCode::ConstantLong,
+        );
     }
 
     fn named_variable(&mut self, name: Token<'src>, can_assign: bool) {
@@ -854,18 +862,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.current_chunk().write_chunk(byte, line);
     }
 
-    fn emit_constant(&mut self, value: Value) {
+    fn add_constant_and_emit(&mut self, value: Value, op: OpCode, op_long: OpCode) {
         let line = match self.previous {
             Some(ref token) => token.line,
             None => 1,
         };
         let offset = self.current_chunk().add_constant(value);
-        self.current_chunk().push_val_offset_op(
-            offset,
-            line,
-            OpCode::Constant,
-            OpCode::ConstantLong,
-        );
+        self.current_chunk()
+            .push_val_offset_op(offset, line, op, op_long);
     }
 
     fn patch_jump(&mut self, offset: usize) {
