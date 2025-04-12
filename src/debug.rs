@@ -11,7 +11,7 @@ pub fn disassemble_chunk(chunk: &Chunk, name: &str, vm: &Vm) {
     }
 }
 
-pub fn disassemble_instruction(chunk: &Chunk, ip: usize, vm: &Vm) -> usize {
+pub fn disassemble_instruction(chunk: &Chunk, mut ip: usize, vm: &Vm) -> usize {
     print!("{ip:04} ");
     if ip > 0 && chunk.get_line(ip) == chunk.get_line(ip - 1) {
         print!("   | ");
@@ -66,24 +66,83 @@ pub fn disassemble_instruction(chunk: &Chunk, ip: usize, vm: &Vm) -> usize {
             offset_instruction("OP_GET_LOCAL", chunk, ip, InstructionType::Local, vm)
         }
         OpCode::GetLocalLong => {
-            offset_instruction("OP_GET_LOCAL_LONG", chunk, ip, InstructionType::Local, vm)
+            offset_long_instruction("OP_GET_LOCAL_LONG", chunk, ip, InstructionType::Local, vm)
         }
         OpCode::SetLocal => {
             offset_instruction("OP_SET_LOCAL", chunk, ip, InstructionType::Local, vm)
         }
         OpCode::SetLocalLong => {
-            offset_instruction("OP_SET_LOCAL_LONG", chunk, ip, InstructionType::Local, vm)
+            offset_long_instruction("OP_SET_LOCAL_LONG", chunk, ip, InstructionType::Local, vm)
         }
         OpCode::JumpIfFalse => jump_instruction("OP_JUMP_IF_FALSE", false, chunk, ip),
         OpCode::Jump => jump_instruction("OP_JUMP", false, chunk, ip),
         OpCode::Loop => jump_instruction("OP_LOOP", true, chunk, ip),
         OpCode::Call => offset_instruction("OP_CALL", chunk, ip, InstructionType::Call, vm),
         OpCode::Closure => {
-            offset_instruction("OP_CLOSURE", chunk, ip, InstructionType::Closure, vm)
+            let offset = chunk.code[ip + 1] as usize;
+            print!("{:<16} {offset:4} '", "OP_CLOSURE");
+            let function = &chunk.constants[offset];
+            vm.print_value(function);
+            print!("'\n");
+            ip += 2;
+            if let Value::Function(function) = function {
+                for _ in 0..function.upvalue_count {
+                    let upvalue_type = if chunk.code[ip + 1] == 1 {
+                        "local"
+                    } else {
+                        "upvalue"
+                    };
+                    let index = chunk.code[ip + 2];
+                    println!("{ip:04}      |                     {upvalue_type} {index}");
+                    ip += 2;
+                }
+            }
+            ip
         }
         OpCode::ClosureLong => {
-            offset_instruction("OP_CLOSURE_LONG", chunk, ip, InstructionType::Closure, vm)
+            let left_byte = chunk.code[ip + 1] as usize;
+            let middle_byte = chunk.code[ip + 2] as usize;
+            let right_byte = chunk.code[ip + 3] as usize;
+            let offset = (left_byte << 16) + (middle_byte << 8) + right_byte;
+            print!("{:<16} {offset:4} '", "OP_CLOSURE_LONG");
+            let function = &chunk.constants[offset];
+            vm.print_value(function);
+            print!("'\n");
+            ip += 4;
+            if let Value::Function(function) = function {
+                for _ in 0..function.upvalue_count {
+                    let upvalue_type = if chunk.code[ip + 1] == 1 {
+                        "local"
+                    } else {
+                        "upvalue"
+                    };
+                    let index = chunk.code[ip + 2];
+                    println!("{ip:04}      |                     {upvalue_type} {index}");
+                    ip += 2;
+                }
+            }
+            ip
         }
+        OpCode::GetUpvalue => {
+            offset_instruction("OP_GET_UPVALUE", chunk, ip, InstructionType::UpValue, vm)
+        }
+        OpCode::GetUpvalueLong => offset_long_instruction(
+            "OP_GET_UPVALUE_LONG",
+            chunk,
+            ip,
+            InstructionType::UpValue,
+            vm,
+        ),
+        OpCode::SetUpvalue => {
+            offset_instruction("OP_SET_UPVALUE", chunk, ip, InstructionType::UpValue, vm)
+        }
+        OpCode::SetUpvalueLong => offset_long_instruction(
+            "OP_SET_UPVALUE_LONG",
+            chunk,
+            ip,
+            InstructionType::UpValue,
+            vm,
+        ),
     }
 }
 
@@ -97,7 +156,7 @@ enum InstructionType {
     Local,
     Load,
     Call,
-    Closure,
+    UpValue,
 }
 
 fn offset_instruction(
@@ -119,8 +178,7 @@ fn offset_instruction(
                 }
             }
         }
-        InstructionType::Local | InstructionType::Call => (),
-        InstructionType::Closure => vm.print_value(&chunk.constants[offset]),
+        InstructionType::Local | InstructionType::Call | InstructionType::UpValue => (),
     }
     print!("'\n");
     ip + 2
@@ -148,8 +206,7 @@ fn offset_long_instruction(
                 }
             }
         }
-        InstructionType::Local | InstructionType::Call => (),
-        InstructionType::Closure => vm.print_value(&chunk.constants[offset]),
+        InstructionType::Local | InstructionType::Call | InstructionType::UpValue => (),
     }
     print!("'\n");
     ip + 4

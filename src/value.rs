@@ -8,6 +8,7 @@ pub struct StrId(u32);
 #[derive(Debug, Clone)]
 pub struct LoxFunction {
     pub arity: u8,
+    pub upvalue_count: usize,
     pub chunk: Chunk,
     pub name: Option<StrId>,
 }
@@ -16,25 +17,32 @@ impl LoxFunction {
     pub fn new(name: Option<StrId>) -> Self {
         Self {
             arity: 0,
+            upvalue_count: 0,
             chunk: Chunk::new(),
             name,
         }
     }
 }
 
-impl Default for LoxFunction {
-    fn default() -> Self {
-        Self {
-            arity: 0,
-            chunk: Chunk::new(),
-            name: None,
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct Upvalue {
+    pub location: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct LoxClosure {
     pub function: Rc<LoxFunction>,
+    pub upvalues: Vec<Upvalue>,
+}
+
+impl LoxClosure {
+    pub fn new(function: Rc<LoxFunction>) -> Self {
+        let upvalue_count = function.upvalue_count;
+        Self {
+            function,
+            upvalues: Vec::with_capacity(upvalue_count),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -46,7 +54,7 @@ pub enum Value {
     Undefined,
     Function(Rc<LoxFunction>),
     Native(fn(u8, usize) -> Value, u8),
-    Closure(LoxClosure),
+    Closure(Rc<LoxClosure>),
 }
 
 impl PartialEq for Value {

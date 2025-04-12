@@ -5,6 +5,7 @@ use crate::{
     value::{LoxFunction, StrId, Value},
     vm::Vm,
 };
+use std::cell::Cell;
 use std::rc::Rc;
 
 pub fn compile(source: &str, vm: &mut Vm, debug_mode: bool) -> Option<Rc<LoxFunction>> {
@@ -14,31 +15,31 @@ pub fn compile(source: &str, vm: &mut Vm, debug_mode: bool) -> Option<Rc<LoxFunc
     while parser.current.is_some() {
         parser.declaration();
     }
-    end_compiler(&mut parser)
+
+    let compiler = end_compiler(&mut parser);
+    match parser.had_error.get() {
+        true => None,
+        false => Some(Rc::new(compiler.function)),
+    }
 }
 
-fn end_compiler(parser: &mut Parser) -> Option<Rc<LoxFunction>> {
+fn end_compiler<'src>(parser: &mut Parser<'src, '_>) -> Compiler<'src> {
     parser.emit_return();
-    match parser.had_error {
-        true => None,
-        false => {
-            let compiler = parser
-                .compiler
-                .take()
-                .expect("Will always be Some(Compiler) in end_compiler call.");
-            if parser.debug_mode {
-                let current_chunk = &compiler.function.chunk;
-                let name = match compiler.function.name {
-                    Some(name_id) => parser.vm.strings.lookup(name_id),
-                    None => "<script>",
-                };
-                disassemble_chunk(current_chunk, name, &parser.vm);
-            }
-            let fun = compiler.function.clone();
-            parser.compiler = compiler.enclosing;
-            Some(Rc::new(fun))
-        }
+
+    let compiler = parser
+        .compilers
+        .pop()
+        .expect("parser.compilers will always be non-empty.");
+
+    if parser.debug_mode {
+        let current_chunk = &compiler.function.chunk;
+        let name = match compiler.function.name {
+            Some(name_id) => parser.vm.strings.lookup(name_id),
+            None => "<script>",
+        };
+        disassemble_chunk(current_chunk, name, &parser.vm);
     }
+    compiler
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -81,6 +82,12 @@ struct Local<'src> {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct Upvalue {
+    index: usize,
+    is_local: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum FunctionType {
     Function,
     Script,
@@ -88,19 +95,15 @@ enum FunctionType {
 
 #[derive(Debug, Clone)]
 struct Compiler<'src> {
-    enclosing: Option<Box<Compiler<'src>>>,
     function: LoxFunction,
     function_type: FunctionType,
     locals: Vec<Local<'src>>,
     scope_depth: i32,
+    upvalues: Vec<Upvalue>,
 }
 
 impl<'src> Compiler<'src> {
-    fn new(
-        function_type: FunctionType,
-        enclosing: Option<Box<Compiler<'src>>>,
-        name: Option<StrId>,
-    ) -> Self {
+    fn new(function_type: FunctionType, name: Option<StrId>) -> Self {
         let placeholder = Token {
             token_type: TokenType::Identifier,
             lexeme: "",
@@ -111,11 +114,11 @@ impl<'src> Compiler<'src> {
             depth: 0,
         }];
         Self {
-            enclosing,
             function: LoxFunction::new(name),
             function_type,
             locals,
             scope_depth: 0,
+            upvalues: vec![],
         }
     }
 }
@@ -124,27 +127,27 @@ struct Parser<'src, 'vm> {
     current: Option<Token<'src>>,
     previous: Option<Token<'src>>,
     scanner: Scanner<'src>,
-    had_error: bool,
-    panic_mode: bool,
+    had_error: Cell<bool>,
+    panic_mode: Cell<bool>,
     debug_mode: bool,
     vm: &'vm mut Vm,
-    compiler: Option<Box<Compiler<'src>>>,
+    compilers: Vec<Compiler<'src>>,
     loop_depth: u32,
     loop_condition_offsets: Vec<usize>,
 }
 
 impl<'src, 'vm> Parser<'src, 'vm> {
     fn new(scanner: Scanner<'src>, vm: &'vm mut Vm, debug_mode: bool) -> Self {
-        let compiler = Some(Box::new(Compiler::new(FunctionType::Script, None, None)));
+        let compiler = Compiler::new(FunctionType::Script, None);
         Self {
             current: None,
             previous: None,
             scanner,
-            had_error: false,
-            panic_mode: false,
+            had_error: Cell::new(false),
+            panic_mode: Cell::new(false),
             debug_mode,
             vm,
-            compiler,
+            compilers: vec![compiler],
             loop_depth: 0,
             loop_condition_offsets: Vec::new(),
         }
@@ -167,12 +170,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn current_chunk(&mut self) -> &mut Chunk {
-        &mut self
-            .compiler
-            .as_mut()
-            .expect("Parser will always have an active compiler.")
-            .function
-            .chunk
+        match self.compilers.last_mut() {
+            Some(compiler) => &mut compiler.function.chunk,
+            None => unreachable!("Will always be Some compiler when this method is called."),
+        }
     }
 
     fn run_prefix_rule(&mut self, token_type: TokenType, can_assign: bool) -> bool {
@@ -259,16 +260,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
     }
 
-    fn resolve_local(&mut self, name: Token<'src>) -> Option<usize> {
-        for (idx, local) in self
-            .compiler
-            .as_ref()
-            .unwrap()
-            .locals
-            .iter()
-            .enumerate()
-            .rev()
-        {
+    fn resolve_local(&self, compiler_idx: usize, name: Token<'src>) -> Option<usize> {
+        for (idx, local) in self.compilers[compiler_idx].locals.iter().enumerate().rev() {
             if local.name.lexeme == name.lexeme {
                 if local.depth == -1 {
                     self.error_at(name, "Can't read local variable in its own initializer.");
@@ -280,41 +273,79 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         None
     }
 
+    fn add_upvalue(&mut self, compiler_idx: usize, index: usize, is_local: bool) -> usize {
+        match self.compilers.get_mut(compiler_idx) {
+            Some(compiler) => {
+                for (idx, upvalue) in compiler.upvalues.iter().enumerate() {
+                    if upvalue.index == index && upvalue.is_local == is_local {
+                        return idx;
+                    }
+                }
+
+                compiler.upvalues.push(Upvalue { index, is_local });
+                compiler.function.upvalue_count = compiler.upvalues.len();
+                compiler.upvalues.len() - 1
+            }
+            None => unreachable!("Will always be Some compiler."),
+        }
+    }
+
+    fn resolve_upvalue(&mut self, compiler_idx: usize, name: Token<'src>) -> Option<usize> {
+        if compiler_idx == 0 {
+            return None;
+        }
+
+        let enclosing_idx = compiler_idx - 1;
+        match self.resolve_local(enclosing_idx, name) {
+            Some(local) => Some(self.add_upvalue(compiler_idx, local, true)),
+            None => match self.resolve_upvalue(enclosing_idx, name) {
+                Some(upvalue) => Some(self.add_upvalue(compiler_idx, upvalue, false)),
+                None => None,
+            },
+        }
+    }
+
     fn add_local(&mut self, name: Token<'src>) {
         let local = Local { name, depth: -1 };
-        self.compiler.as_mut().unwrap().locals.push(local);
+        if let Some(compiler) = self.compilers.last_mut() {
+            compiler.locals.push(local);
+        }
     }
 
     fn declare_variable(&mut self) {
-        if self.compiler.as_ref().unwrap().scope_depth == 0 {
-            return;
-        }
-
-        let name = self.previous.expect("Just consumed Identifier Token.");
-        let mut var_exists = false;
-        for local in self.compiler.as_ref().unwrap().locals.iter().rev() {
-            if local.depth < self.compiler.as_ref().unwrap().scope_depth {
-                break;
+        if let Some(compiler) = self.compilers.last_mut() {
+            if compiler.scope_depth == 0 {
+                return;
             }
 
-            if local.name.lexeme == name.lexeme {
-                var_exists = true;
-                break;
-            }
-        }
-        if var_exists {
-            self.error_at(name, "Already a variable with this name in this scope.");
-        }
+            let name = self.previous.expect("Just consumed Identifier Token.");
+            let mut var_exists = false;
+            for local in compiler.locals.iter().rev() {
+                if local.depth < compiler.scope_depth {
+                    break;
+                }
 
-        self.add_local(name);
+                if local.name.lexeme == name.lexeme {
+                    var_exists = true;
+                    break;
+                }
+            }
+            if var_exists {
+                self.error_at(name, "Already a variable with this name in this scope.");
+            }
+
+            self.add_local(name);
+        }
     }
 
     fn parse_variable(&mut self, error_message: &str) -> usize {
         self.consume(TokenType::Identifier, error_message);
 
         self.declare_variable();
-        if self.compiler.as_ref().unwrap().scope_depth > 0 {
-            return 0;
+        if let Some(compiler) = self.compilers.last() {
+            if compiler.scope_depth > 0 {
+                return 0;
+            }
         }
 
         let name = self.previous.expect("Just consumed Identifier Token.");
@@ -322,18 +353,21 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn mark_initialized(&mut self) {
-        if self.compiler.as_ref().unwrap().scope_depth == 0 {
-            return;
+        if let Some(compiler) = self.compilers.last_mut() {
+            if compiler.scope_depth == 0 {
+                return;
+            }
+            let idx = compiler.locals.len() - 1;
+            compiler.locals[idx].depth = compiler.scope_depth;
         }
-        let idx = self.compiler.as_ref().unwrap().locals.len() - 1;
-        self.compiler.as_mut().unwrap().locals[idx].depth =
-            self.compiler.as_ref().unwrap().scope_depth;
     }
 
     fn define_variable(&mut self, global_offset: usize) {
-        if self.compiler.as_ref().unwrap().scope_depth > 0 {
-            self.mark_initialized();
-            return;
+        if let Some(compiler) = self.compilers.last() {
+            if compiler.scope_depth > 0 {
+                self.mark_initialized();
+                return;
+            }
         }
 
         let line = match self.previous {
@@ -407,20 +441,20 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             FunctionType::Function => Some(self.vm.strings.intern(self.previous.unwrap().lexeme)),
             FunctionType::Script => None,
         };
-        let compiler = Compiler::new(function_type, self.compiler.take(), name);
-        self.compiler = Some(Box::new(compiler));
+        self.compilers.push(Compiler::new(function_type, name));
         self.begin_scope();
 
         self.consume(TokenType::LeftParen, "Expect '(' after function name.");
         if !self.check(TokenType::RightParen) {
             loop {
-                if self.compiler.as_ref().unwrap().function.arity == 255 {
+                let compiler_idx = self.compilers.len() - 1;
+                if self.compilers[compiler_idx].function.arity == 255 {
                     self.error_at(
                         self.current.unwrap_or_else(|| self.create_eof_token()),
                         "Can't have more than 255 parameters.",
                     );
                 }
-                self.compiler.as_mut().unwrap().function.arity += 1;
+                self.compilers[compiler_idx].function.arity += 1;
                 let constant = self.parse_variable("Expect parameter name.");
                 self.define_variable(constant);
                 if !self.match_token(TokenType::Comma) {
@@ -432,12 +466,19 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.consume(TokenType::LeftBrace, "Expect '{' before function body.");
         self.block();
 
-        if let Some(lox_function) = end_compiler(self) {
-            self.add_constant_and_emit(
-                Value::Function(lox_function),
-                OpCode::Closure,
-                OpCode::ClosureLong,
-            );
+        let compiler = end_compiler(self);
+        self.add_constant_and_emit(
+            Value::Function(Rc::new(compiler.function)),
+            OpCode::Closure,
+            OpCode::ClosureLong,
+        );
+
+        for upvalue in compiler.upvalues {
+            match upvalue.is_local {
+                true => self.emit_byte(1),
+                false => self.emit_byte(0),
+            }
+            self.emit_byte(upvalue.index as u8);
         }
     }
 
@@ -551,7 +592,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             lexeme: "switch",
             line: self.previous.expect("Will always be Some variant").line,
         };
-        let switch_value_offset = self.compiler.as_ref().unwrap().locals.len();
+        let switch_value_offset = self.compilers[self.compilers.len() - 1].locals.len();
         self.add_local(switch_value_token);
         self.mark_initialized();
         self.consume(TokenType::RightParen, "Expect ')' after expression.");
@@ -605,7 +646,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn return_statement(&mut self) {
-        match self.compiler.as_ref().unwrap().function_type {
+        match self.compilers[self.compilers.len() - 1].function_type {
             FunctionType::Script => {
                 self.error_at(self.previous.unwrap(), "Can't return from top-level code.")
             }
@@ -654,7 +695,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn synchronize(&mut self) {
-        self.panic_mode = false;
+        self.panic_mode.set(false);
 
         while let Some(ref current) = self.current {
             if let Some(ref previous) = self.previous {
@@ -686,7 +727,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.statement();
         }
 
-        if self.panic_mode {
+        if self.panic_mode.get() {
             self.synchronize();
         }
     }
@@ -748,13 +789,21 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let (mut get_op, mut get_op_long) = (OpCode::GetLocal, OpCode::GetLocalLong);
         let (mut set_op, mut set_op_long) = (OpCode::SetLocal, OpCode::SetLocalLong);
 
-        let offset = match self.resolve_local(name) {
+        let compiler_idx = self.compilers.len() - 1;
+        let offset = match self.resolve_local(compiler_idx, name) {
             Some(idx) => idx,
-            None => {
-                (get_op, get_op_long) = (OpCode::GetGlobal, OpCode::GetGlobalLong);
-                (set_op, set_op_long) = (OpCode::SetGlobal, OpCode::SetGlobalLong);
-                self.identifier_constant(name)
-            }
+            None => match self.resolve_upvalue(compiler_idx, name) {
+                Some(idx) => {
+                    (get_op, get_op_long) = (OpCode::GetUpvalue, OpCode::GetUpvalueLong);
+                    (set_op, set_op_long) = (OpCode::SetUpvalue, OpCode::SetUpvalueLong);
+                    idx
+                }
+                None => {
+                    (get_op, get_op_long) = (OpCode::GetGlobal, OpCode::GetGlobalLong);
+                    (set_op, set_op_long) = (OpCode::SetGlobal, OpCode::SetGlobalLong);
+                    self.identifier_constant(name)
+                }
+            },
         };
 
         let line = match self.previous {
@@ -959,29 +1008,33 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn begin_scope(&mut self) {
-        self.compiler.as_mut().unwrap().scope_depth += 1;
+        if let Some(compiler) = self.compilers.last_mut() {
+            compiler.scope_depth += 1;
+        }
     }
 
     fn end_scope(&mut self) {
-        self.compiler.as_mut().unwrap().scope_depth -= 1;
+        let compiler_idx = self.compilers.len() - 1;
 
-        let mut local_count = self.compiler.as_ref().unwrap().locals.len();
+        self.compilers[compiler_idx].scope_depth -= 1;
+
+        let mut local_count = self.compilers[compiler_idx].locals.len();
         while local_count > 0
-            && self.compiler.as_ref().unwrap().locals[local_count - 1].depth
-                > self.compiler.as_ref().unwrap().scope_depth
+            && self.compilers[compiler_idx].locals[local_count - 1].depth
+                > self.compilers[compiler_idx].scope_depth
         {
             self.emit_byte(OpCode::Pop as u8);
-            self.compiler.as_mut().unwrap().locals.pop();
+            self.compilers[compiler_idx].locals.pop();
             local_count -= 1;
         }
     }
 
-    fn error_at(&mut self, token: Token<'src>, message: &str) {
-        if self.panic_mode {
+    fn error_at(&self, token: Token<'src>, message: &str) {
+        if self.panic_mode.get() {
             return;
         }
 
-        self.panic_mode = true;
+        self.panic_mode.set(true);
 
         match token.token_type {
             TokenType::Error => println!("[line {}] Error: {}", token.line, token.lexeme),
@@ -992,6 +1045,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             ),
         }
 
-        self.had_error = true;
+        self.had_error.set(true);
     }
 }

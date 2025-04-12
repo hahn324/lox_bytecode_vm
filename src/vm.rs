@@ -2,7 +2,7 @@ use crate::{
     chunk::OpCode,
     compiler::compile,
     debug::disassemble_instruction,
-    value::{LoxClosure, StrId, StringInterner, Value},
+    value::{LoxClosure, LoxFunction, StrId, StringInterner, Upvalue, Value},
 };
 use rustc_hash::FxHashMap;
 use std::rc::Rc;
@@ -27,7 +27,7 @@ fn is_falsey(value: Value) -> bool {
 
 #[derive(Debug, Clone)]
 struct CallFrame {
-    closure: LoxClosure,
+    closure: Rc<LoxClosure>,
     ip: usize,
     frame_ptr: usize,
 }
@@ -64,7 +64,7 @@ impl Vm {
         match compile(source, self, self.debug_trace) {
             Some(function) => {
                 self.push(Value::Function(Rc::clone(&function)));
-                let closure = LoxClosure { function };
+                let closure = Rc::new(LoxClosure::new(function));
                 self.pop();
                 self.push(Value::Closure(closure.clone()));
                 self.frames[0] = Some(CallFrame {
@@ -303,26 +303,50 @@ impl Vm {
                         self.frames[self.frame_count - 2] = Some(current_frame);
                         current_frame = self.frames[self.frame_count - 1]
                             .take()
-                            .expect("Will be new CallFrame.");
+                            .expect("Will always be a new CallFrame.");
                     }
                 }
                 OpCode::Closure => {
                     let offset = Vm::get_offset_short(&mut current_frame);
                     let lox_fun = current_frame.closure.function.chunk.constants[offset].clone();
                     let closure = match lox_fun {
-                        Value::Function(function) => LoxClosure { function },
+                        Value::Function(function) => {
+                            self.create_closure(&mut current_frame, function)
+                        }
                         _ => unreachable!("Will always be Value::Function variant."),
                     };
-                    self.push(Value::Closure(closure));
+
+                    self.push(Value::Closure(Rc::new(closure)));
                 }
                 OpCode::ClosureLong => {
                     let offset = Vm::get_offset_long(&mut current_frame);
                     let lox_fun = current_frame.closure.function.chunk.constants[offset].clone();
                     let closure = match lox_fun {
-                        Value::Function(function) => LoxClosure { function },
+                        Value::Function(function) => {
+                            self.create_closure(&mut current_frame, function)
+                        }
                         _ => unreachable!("Will always be Value::Function variant."),
                     };
-                    self.push(Value::Closure(closure));
+
+                    self.push(Value::Closure(Rc::new(closure)));
+                }
+                OpCode::GetUpvalue => {
+                    let offset = Vm::get_offset_short(&mut current_frame);
+                    let value = self.stack[current_frame.closure.upvalues[offset].location].clone();
+                    self.push(value);
+                }
+                OpCode::GetUpvalueLong => {
+                    let offset = Vm::get_offset_long(&mut current_frame);
+                    let value = self.stack[current_frame.closure.upvalues[offset].location].clone();
+                    self.push(value);
+                }
+                OpCode::SetUpvalue => {
+                    let offset = Vm::get_offset_short(&mut current_frame);
+                    self.stack[current_frame.closure.upvalues[offset].location] = self.peek(0);
+                }
+                OpCode::SetUpvalueLong => {
+                    let offset = Vm::get_offset_long(&mut current_frame);
+                    self.stack[current_frame.closure.upvalues[offset].location] = self.peek(0);
                 }
             }
         }
@@ -357,7 +381,7 @@ impl Vm {
         self.stack[self.stack_count - 1 - offset].clone()
     }
 
-    fn call(&mut self, closure: LoxClosure, arg_count: u8, current_frame: &CallFrame) -> bool {
+    fn call(&mut self, closure: Rc<LoxClosure>, arg_count: u8, current_frame: &CallFrame) -> bool {
         if arg_count != closure.function.arity {
             self.runtime_error(
                 current_frame,
@@ -370,7 +394,7 @@ impl Vm {
         }
 
         if self.frame_count == FRAMES_MAX {
-            self.runtime_error(current_frame, "Sack overflow.");
+            self.runtime_error(current_frame, "Stack overflow.");
             return false;
         }
 
@@ -404,6 +428,33 @@ impl Vm {
                 self.runtime_error(current_frame, "Can only call functions and classes.");
                 false
             }
+        }
+    }
+
+    fn create_closure(&mut self, frame: &mut CallFrame, function: Rc<LoxFunction>) -> LoxClosure {
+        let mut closure = LoxClosure::new(function);
+
+        for _ in 0..closure.upvalues.capacity() {
+            let is_local = frame.closure.function.chunk.code[frame.ip];
+            frame.ip += 1;
+            let index = frame.closure.function.chunk.code[frame.ip] as usize;
+            frame.ip += 1;
+
+            if is_local == 1 {
+                closure
+                    .upvalues
+                    .push(self.capture_upvalue(frame.frame_ptr + index));
+            } else {
+                closure.upvalues.push(frame.closure.upvalues[index].clone());
+            }
+        }
+
+        closure
+    }
+
+    fn capture_upvalue(&mut self, stack_offset: usize) -> Upvalue {
+        Upvalue {
+            location: stack_offset,
         }
     }
 
