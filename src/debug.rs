@@ -87,12 +87,12 @@ pub fn disassemble_instruction(chunk: &Chunk, mut ip: usize, vm: &Vm) -> usize {
             ip += 2;
             if let Value::Function(function) = function {
                 for _ in 0..function.upvalue_count {
-                    let upvalue_type = if chunk.code[ip + 1] == 1 {
+                    let upvalue_type = if chunk.code[ip] == 1 {
                         "local"
                     } else {
                         "upvalue"
                     };
-                    let index = chunk.code[ip + 2];
+                    let index = chunk.code[ip + 1];
                     println!("{ip:04}      |                     {upvalue_type} {index}");
                     ip += 2;
                 }
@@ -111,12 +111,12 @@ pub fn disassemble_instruction(chunk: &Chunk, mut ip: usize, vm: &Vm) -> usize {
             ip += 4;
             if let Value::Function(function) = function {
                 for _ in 0..function.upvalue_count {
-                    let upvalue_type = if chunk.code[ip + 1] == 1 {
+                    let upvalue_type = if chunk.code[ip] == 1 {
                         "local"
                     } else {
                         "upvalue"
                     };
-                    let index = chunk.code[ip + 2];
+                    let index = chunk.code[ip + 1];
                     println!("{ip:04}      |                     {upvalue_type} {index}");
                     ip += 2;
                 }
@@ -143,6 +143,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut ip: usize, vm: &Vm) -> usize {
             InstructionType::UpValue,
             vm,
         ),
+        OpCode::CloseUpvalue => simple_instruction("OP_CLOSE_UPVALUE", ip),
     }
 }
 

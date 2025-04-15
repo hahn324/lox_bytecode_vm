@@ -79,6 +79,7 @@ impl From<TokenType> for Precedence {
 struct Local<'src> {
     name: Token<'src>,
     depth: i32,
+    is_captured: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -112,6 +113,7 @@ impl<'src> Compiler<'src> {
         let locals = vec![Local {
             name: placeholder,
             depth: 0,
+            is_captured: false,
         }];
         Self {
             function: LoxFunction::new(name),
@@ -297,7 +299,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
         let enclosing_idx = compiler_idx - 1;
         match self.resolve_local(enclosing_idx, name) {
-            Some(local) => Some(self.add_upvalue(compiler_idx, local, true)),
+            Some(local) => {
+                self.compilers[enclosing_idx].locals[local].is_captured = true;
+                Some(self.add_upvalue(compiler_idx, local, true))
+            }
             None => match self.resolve_upvalue(enclosing_idx, name) {
                 Some(upvalue) => Some(self.add_upvalue(compiler_idx, upvalue, false)),
                 None => None,
@@ -306,7 +311,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn add_local(&mut self, name: Token<'src>) {
-        let local = Local { name, depth: -1 };
+        let local = Local {
+            name,
+            depth: -1,
+            is_captured: false,
+        };
         if let Some(compiler) = self.compilers.last_mut() {
             compiler.locals.push(local);
         }
@@ -1023,7 +1032,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             && self.compilers[compiler_idx].locals[local_count - 1].depth
                 > self.compilers[compiler_idx].scope_depth
         {
-            self.emit_byte(OpCode::Pop as u8);
+            if self.compilers[compiler_idx].locals[local_count - 1].is_captured {
+                self.emit_byte(OpCode::CloseUpvalue as u8);
+            } else {
+                self.emit_byte(OpCode::Pop as u8);
+            }
             self.compilers[compiler_idx].locals.pop();
             local_count -= 1;
         }

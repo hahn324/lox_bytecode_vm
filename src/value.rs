@@ -1,5 +1,6 @@
 use crate::chunk::Chunk;
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Copy, Eq, Hash)]
@@ -25,14 +26,16 @@ impl LoxFunction {
 }
 
 #[derive(Debug, Clone)]
-pub struct Upvalue {
+pub struct LoxUpvalue {
     pub location: usize,
+    pub closed: Value,
+    pub next: Option<Rc<RefCell<LoxUpvalue>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LoxClosure {
     pub function: Rc<LoxFunction>,
-    pub upvalues: Vec<Upvalue>,
+    pub upvalues: Vec<Rc<RefCell<LoxUpvalue>>>,
 }
 
 impl LoxClosure {

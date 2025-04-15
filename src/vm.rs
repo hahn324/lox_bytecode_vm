@@ -2,9 +2,11 @@ use crate::{
     chunk::OpCode,
     compiler::compile,
     debug::disassemble_instruction,
-    value::{LoxClosure, LoxFunction, StrId, StringInterner, Upvalue, Value},
+    value::{LoxClosure, LoxFunction, LoxUpvalue, StrId, StringInterner, Value},
 };
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
+use std::cmp;
 use std::rc::Rc;
 use std::time::SystemTime;
 
@@ -41,6 +43,7 @@ pub struct Vm {
     pub strings: StringInterner,
     pub global_names: FxHashMap<StrId, usize>,
     pub global_values: Vec<Value>,
+    open_upvalues: Option<Rc<RefCell<LoxUpvalue>>>,
 }
 impl Vm {
     pub fn new(debug_trace: bool) -> Self {
@@ -53,6 +56,7 @@ impl Vm {
             strings: StringInterner::default(),
             global_names: FxHashMap::default(),
             global_values: Vec::new(),
+            open_upvalues: None,
         };
         // Initialize global native functions
         vm.define_native("clock", clock_native, 0);
@@ -129,6 +133,7 @@ impl Vm {
             match OpCode::from(instruction) {
                 OpCode::Return => {
                     let result = self.pop();
+                    self.close_upvalues(current_frame.frame_ptr);
                     self.frame_count -= 1;
                     if self.frame_count == 0 {
                         self.pop();
@@ -332,21 +337,42 @@ impl Vm {
                 }
                 OpCode::GetUpvalue => {
                     let offset = Vm::get_offset_short(&mut current_frame);
-                    let value = self.stack[current_frame.closure.upvalues[offset].location].clone();
+                    let upvalue = current_frame.closure.upvalues[offset].borrow();
+                    let value = match upvalue.location {
+                        0 => upvalue.closed.clone(),
+                        _ => self.stack[upvalue.location].clone(),
+                    };
                     self.push(value);
                 }
                 OpCode::GetUpvalueLong => {
                     let offset = Vm::get_offset_long(&mut current_frame);
-                    let value = self.stack[current_frame.closure.upvalues[offset].location].clone();
+                    let upvalue = current_frame.closure.upvalues[offset].borrow();
+                    let value = match upvalue.location {
+                        0 => upvalue.closed.clone(),
+                        _ => self.stack[upvalue.location].clone(),
+                    };
                     self.push(value);
                 }
                 OpCode::SetUpvalue => {
                     let offset = Vm::get_offset_short(&mut current_frame);
-                    self.stack[current_frame.closure.upvalues[offset].location] = self.peek(0);
+                    let mut upvalue = current_frame.closure.upvalues[offset].borrow_mut();
+                    match upvalue.location {
+                        0 => upvalue.closed = self.peek(0),
+                        _ => self.stack[upvalue.location] = self.peek(0),
+                    }
                 }
                 OpCode::SetUpvalueLong => {
                     let offset = Vm::get_offset_long(&mut current_frame);
-                    self.stack[current_frame.closure.upvalues[offset].location] = self.peek(0);
+                    let mut upvalue = current_frame.closure.upvalues[offset].borrow_mut();
+                    match upvalue.location {
+                        0 => upvalue.closed = self.peek(0),
+                        _ => self.stack[upvalue.location] = self.peek(0),
+                    }
+                }
+                OpCode::CloseUpvalue => {
+                    let upvalue_slot = self.stack_count - 1;
+                    self.close_upvalues(upvalue_slot);
+                    self.pop();
                 }
             }
         }
@@ -452,9 +478,49 @@ impl Vm {
         closure
     }
 
-    fn capture_upvalue(&mut self, stack_offset: usize) -> Upvalue {
-        Upvalue {
+    fn capture_upvalue(&mut self, stack_offset: usize) -> Rc<RefCell<LoxUpvalue>> {
+        let mut prev_upvalue = None;
+        let mut cur_upvalue = self.open_upvalues.clone();
+        while let Some(ref upvalue) = cur_upvalue {
+            let cur_location = upvalue.borrow().location;
+            match cur_location.cmp(&stack_offset) {
+                cmp::Ordering::Less => break,
+                cmp::Ordering::Equal => return Rc::clone(upvalue),
+                cmp::Ordering::Greater => {
+                    prev_upvalue = cur_upvalue.clone();
+                    let next_upvalue = upvalue.borrow().next.clone();
+                    cur_upvalue = next_upvalue;
+                }
+            }
+        }
+
+        let created_upvalue = Rc::new(RefCell::new(LoxUpvalue {
             location: stack_offset,
+            closed: Value::Nil,
+            next: cur_upvalue.clone(),
+        }));
+
+        match prev_upvalue {
+            Some(upvalue) => {
+                upvalue.borrow_mut().next = Some(Rc::clone(&created_upvalue));
+            }
+            None => {
+                self.open_upvalues = Some(Rc::clone(&created_upvalue));
+            }
+        }
+
+        created_upvalue
+    }
+
+    fn close_upvalues(&mut self, last_idx: usize) {
+        while let Some(upvalue) = self.open_upvalues.clone() {
+            let location = upvalue.borrow().location;
+            if location < last_idx {
+                break;
+            }
+            upvalue.borrow_mut().closed = self.stack[location].clone();
+            upvalue.borrow_mut().location = 0;
+            self.open_upvalues = upvalue.borrow().next.clone();
         }
     }
 

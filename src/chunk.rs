@@ -40,6 +40,7 @@ pub enum OpCode {
     GetUpvalueLong,
     SetUpvalue,
     SetUpvalueLong,
+    CloseUpvalue,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -81,6 +82,7 @@ impl From<u8> for OpCode {
             34 => OpCode::GetUpvalueLong,
             35 => OpCode::SetUpvalue,
             36 => OpCode::SetUpvalueLong,
+            37 => OpCode::CloseUpvalue,
             _ => panic!("Unknown byte code {byte}"),
         }
     }
