@@ -418,7 +418,7 @@ impl Vm {
                             &format!("Undefined property '{}'.", self.strings.lookup(str_id)),
                         );
                         return InterpretResult::InterpretRuntimeError;
-                    };
+                    }
                 }
                 OpCode::GetPropertyLong => {
                     let instance = match self.peek(0) {
@@ -444,7 +444,7 @@ impl Vm {
                             &format!("Undefined property '{}'.", self.strings.lookup(str_id)),
                         );
                         return InterpretResult::InterpretRuntimeError;
-                    };
+                    }
                 }
                 OpCode::SetProperty => {
                     let instance = match self.peek(1) {
