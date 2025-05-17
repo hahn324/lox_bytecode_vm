@@ -54,13 +54,13 @@ enum Precedence {
     Factor,     // * /
     Unary,      // ! -
     Call,       // . ()
-    Primary,
+                // Primary,
 }
 
 impl From<TokenType> for Precedence {
     fn from(value: TokenType) -> Self {
         match value {
-            TokenType::LeftParen => Precedence::Call,
+            TokenType::LeftParen | TokenType::Dot => Precedence::Call,
             TokenType::Plus | TokenType::Minus => Precedence::Term,
             TokenType::Star | TokenType::Slash => Precedence::Factor,
             TokenType::BangEqual | TokenType::EqualEqual => Precedence::Equality,
@@ -197,7 +197,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         true
     }
 
-    fn run_infix_rule(&mut self, token_type: TokenType) {
+    fn run_infix_rule(&mut self, token_type: TokenType, can_assign: bool) {
         match token_type {
             TokenType::LeftParen => self.call(),
             TokenType::Plus
@@ -212,6 +212,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             | TokenType::LessEqual => self.binary(),
             TokenType::And => self.and_(),
             TokenType::Or => self.or_(),
+            TokenType::Dot => self.dot(can_assign),
             _ => (),
         }
     }
@@ -238,6 +239,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                 self.previous
                     .expect("Will always be Some variant.")
                     .token_type,
+                can_assign,
             );
         }
 
@@ -491,6 +493,21 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
     }
 
+    fn class_declaration(&mut self) {
+        // Consumes class identifier. If 0, then not a global var.
+        let global_offset = self.parse_variable("Expect class name.");
+
+        let str_id = self
+            .vm
+            .strings
+            .intern(self.previous.expect("Will contain class name.").lexeme);
+        self.add_constant_and_emit(Value::String(str_id), OpCode::Class, OpCode::ClassLong);
+        self.define_variable(global_offset);
+
+        self.consume(TokenType::LeftBrace, "Expect '{' before class body.");
+        self.consume(TokenType::RightBrace, "Expect '}' after class body.");
+    }
+
     fn fun_declaration(&mut self) {
         let global_offset = self.parse_variable("Expect function name");
         self.mark_initialized();
@@ -728,7 +745,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn declaration(&mut self) {
-        if self.match_token(TokenType::Fun) {
+        if self.match_token(TokenType::Class) {
+            self.class_declaration();
+        } else if self.match_token(TokenType::Fun) {
             self.fun_declaration();
         } else if self.match_token(TokenType::Var) {
             self.var_declaration();
@@ -891,6 +910,29 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn call(&mut self) {
         let arg_count = self.argument_list();
         self.emit_bytes(OpCode::Call as u8, arg_count);
+    }
+
+    fn dot(&mut self, can_assign: bool) {
+        self.consume(TokenType::Identifier, "Expect property name after '.'.");
+        let str_id = self
+            .vm
+            .strings
+            .intern(self.previous.expect("Will contain property name.").lexeme);
+
+        if can_assign && self.match_token(TokenType::Equal) {
+            self.expression();
+            self.add_constant_and_emit(
+                Value::String(str_id),
+                OpCode::SetProperty,
+                OpCode::SetPropertyLong,
+            );
+        } else {
+            self.add_constant_and_emit(
+                Value::String(str_id),
+                OpCode::GetProperty,
+                OpCode::GetPropertyLong,
+            );
+        }
     }
 
     fn literal(&mut self) {

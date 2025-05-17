@@ -41,6 +41,12 @@ pub enum OpCode {
     SetUpvalue,
     SetUpvalueLong,
     CloseUpvalue,
+    Class,
+    ClassLong,
+    SetProperty,
+    SetPropertyLong,
+    GetProperty,
+    GetPropertyLong,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -83,6 +89,12 @@ impl From<u8> for OpCode {
             35 => OpCode::SetUpvalue,
             36 => OpCode::SetUpvalueLong,
             37 => OpCode::CloseUpvalue,
+            38 => OpCode::Class,
+            39 => OpCode::ClassLong,
+            40 => OpCode::SetProperty,
+            41 => OpCode::SetPropertyLong,
+            42 => OpCode::GetProperty,
+            43 => OpCode::GetPropertyLong,
             _ => panic!("Unknown byte code {byte}"),
         }
     }

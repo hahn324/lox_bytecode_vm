@@ -144,6 +144,22 @@ pub fn disassemble_instruction(chunk: &Chunk, mut ip: usize, vm: &Vm) -> usize {
             vm,
         ),
         OpCode::CloseUpvalue => simple_instruction("OP_CLOSE_UPVALUE", ip),
+        OpCode::Class => offset_instruction("OP_CLASS", chunk, ip, InstructionType::Load, vm),
+        OpCode::ClassLong => {
+            offset_long_instruction("OP_CLASS_LONG", chunk, ip, InstructionType::Load, vm)
+        }
+        OpCode::SetProperty => {
+            offset_instruction("OP_SET_PROPERTY", chunk, ip, InstructionType::Load, vm)
+        }
+        OpCode::SetPropertyLong => {
+            offset_long_instruction("OP_SET_PROPERTY_LONG", chunk, ip, InstructionType::Load, vm)
+        }
+        OpCode::GetProperty => {
+            offset_instruction("OP_GET_PROPERTY", chunk, ip, InstructionType::Load, vm)
+        }
+        OpCode::GetPropertyLong => {
+            offset_long_instruction("OP_GET_PROPERTY_LONG", chunk, ip, InstructionType::Load, vm)
+        }
     }
 }
 

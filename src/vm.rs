@@ -2,7 +2,9 @@ use crate::{
     chunk::OpCode,
     compiler::compile,
     debug::disassemble_instruction,
-    value::{LoxClosure, LoxFunction, LoxUpvalue, StrId, StringInterner, Value},
+    value::{
+        LoxClass, LoxClosure, LoxFunction, LoxInstance, LoxUpvalue, StrId, StringInterner, Value,
+    },
 };
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -67,9 +69,7 @@ impl Vm {
     pub fn interpret(&mut self, source: &str) -> InterpretResult {
         match compile(source, self, self.debug_trace) {
             Some(function) => {
-                self.push(Value::Function(Rc::clone(&function)));
                 let closure = Rc::new(LoxClosure::new(function));
-                self.pop();
                 self.push(Value::Closure(closure.clone()));
                 self.frames[0] = Some(CallFrame {
                     closure,
@@ -374,6 +374,116 @@ impl Vm {
                     self.close_upvalues(upvalue_slot);
                     self.pop();
                 }
+                OpCode::Class => {
+                    let offset = Vm::get_offset_short(&mut current_frame);
+                    let value = current_frame.closure.function.chunk.constants[offset].clone();
+                    match value {
+                        Value::String(str_id) => {
+                            self.push(Value::Class(Rc::new(LoxClass::new(str_id))))
+                        }
+                        _ => unreachable!("Will always be String variant for Class name."),
+                    }
+                }
+                OpCode::ClassLong => {
+                    let offset = Vm::get_offset_long(&mut current_frame);
+                    let value = current_frame.closure.function.chunk.constants[offset].clone();
+                    match value {
+                        Value::String(str_id) => {
+                            self.push(Value::Class(Rc::new(LoxClass::new(str_id))))
+                        }
+                        _ => unreachable!("Will always be String variant for ClassLong name."),
+                    }
+                }
+                OpCode::GetProperty => {
+                    let instance = match self.peek(0) {
+                        Value::Instance(instance) => instance,
+                        _ => {
+                            self.runtime_error(&current_frame, "Only instances have properties.");
+                            return InterpretResult::InterpretRuntimeError;
+                        }
+                    };
+                    let offset = Vm::get_offset_short(&mut current_frame);
+                    let value = current_frame.closure.function.chunk.constants[offset].clone();
+                    let str_id = match value {
+                        Value::String(str_id) => str_id,
+                        _ => unreachable!("Will always be String variant for GetProperty."),
+                    };
+
+                    if let Some(value) = instance.fields.borrow().get(&str_id) {
+                        self.pop();
+                        self.push(value.clone());
+                    } else {
+                        self.runtime_error(
+                            &current_frame,
+                            &format!("Undefined property '{}'.", self.strings.lookup(str_id)),
+                        );
+                        return InterpretResult::InterpretRuntimeError;
+                    };
+                }
+                OpCode::GetPropertyLong => {
+                    let instance = match self.peek(0) {
+                        Value::Instance(instance) => instance,
+                        _ => {
+                            self.runtime_error(&current_frame, "Only instances have properties.");
+                            return InterpretResult::InterpretRuntimeError;
+                        }
+                    };
+                    let offset = Vm::get_offset_long(&mut current_frame);
+                    let value = current_frame.closure.function.chunk.constants[offset].clone();
+                    let str_id = match value {
+                        Value::String(str_id) => str_id,
+                        _ => unreachable!("Will always be String variant for GetPropertyLong."),
+                    };
+
+                    if let Some(value) = instance.fields.borrow().get(&str_id) {
+                        self.pop();
+                        self.push(value.clone());
+                    } else {
+                        self.runtime_error(
+                            &current_frame,
+                            &format!("Undefined property '{}'.", self.strings.lookup(str_id)),
+                        );
+                        return InterpretResult::InterpretRuntimeError;
+                    };
+                }
+                OpCode::SetProperty => {
+                    let instance = match self.peek(1) {
+                        Value::Instance(instance) => instance,
+                        _ => {
+                            self.runtime_error(&current_frame, "Only instances have fields.");
+                            return InterpretResult::InterpretRuntimeError;
+                        }
+                    };
+                    let offset = Vm::get_offset_short(&mut current_frame);
+                    let key_value = current_frame.closure.function.chunk.constants[offset].clone();
+                    let str_id = match key_value {
+                        Value::String(str_id) => str_id,
+                        _ => unreachable!("Will always be String variant for SetProperty."),
+                    };
+                    instance.fields.borrow_mut().insert(str_id, self.peek(0));
+                    let value = self.pop();
+                    self.pop();
+                    self.push(value);
+                }
+                OpCode::SetPropertyLong => {
+                    let instance = match self.peek(1) {
+                        Value::Instance(instance) => instance,
+                        _ => {
+                            self.runtime_error(&current_frame, "Only instances have fields.");
+                            return InterpretResult::InterpretRuntimeError;
+                        }
+                    };
+                    let offset = Vm::get_offset_long(&mut current_frame);
+                    let key_value = current_frame.closure.function.chunk.constants[offset].clone();
+                    let str_id = match key_value {
+                        Value::String(str_id) => str_id,
+                        _ => unreachable!("Will always be String variant for SetPropertyLong."),
+                    };
+                    instance.fields.borrow_mut().insert(str_id, self.peek(0));
+                    let value = self.pop();
+                    self.pop();
+                    self.push(value);
+                }
             }
         }
     }
@@ -400,6 +510,12 @@ impl Vm {
                 }
                 None => print!("<script>"),
             },
+            Value::Class(klass) => {
+                print!("{}", self.strings.lookup(klass.name));
+            }
+            Value::Instance(instance) => {
+                print!("{} instance", self.strings.lookup(instance.klass.name));
+            }
         }
     }
 
@@ -436,6 +552,11 @@ impl Vm {
 
     fn call_value(&mut self, callee: Value, arg_count: u8, current_frame: &CallFrame) -> bool {
         match callee {
+            Value::Class(klass) => {
+                self.stack[self.stack_count - arg_count as usize - 1] =
+                    Value::Instance(Rc::new(LoxInstance::new(klass)));
+                return true;
+            }
             Value::Closure(lox_closure) => self.call(lox_closure, arg_count, current_frame),
             Value::Native(native_fn, arity) => {
                 if arg_count != arity {

@@ -49,6 +49,32 @@ impl LoxClosure {
 }
 
 #[derive(Debug, Clone)]
+pub struct LoxClass {
+    pub name: StrId,
+}
+
+impl LoxClass {
+    pub fn new(name: StrId) -> Self {
+        Self { name }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LoxInstance {
+    pub klass: Rc<LoxClass>,
+    pub fields: RefCell<FxHashMap<StrId, Value>>,
+}
+
+impl LoxInstance {
+    pub fn new(klass: Rc<LoxClass>) -> Self {
+        Self {
+            klass,
+            fields: RefCell::new(FxHashMap::default()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Number(f64),
     Bool(bool),
@@ -58,6 +84,8 @@ pub enum Value {
     Function(Rc<LoxFunction>),
     Native(fn(u8, usize) -> Value, u8),
     Closure(Rc<LoxClosure>),
+    Class(Rc<LoxClass>),
+    Instance(Rc<LoxInstance>),
 }
 
 impl PartialEq for Value {
@@ -74,7 +102,7 @@ impl PartialEq for Value {
 
 #[derive(Default)]
 pub struct StringInterner {
-    pub id_map: FxHashMap<String, StrId>,
+    pub id_map: FxHashMap<&'static str, StrId>,
     vec: Vec<String>,
 }
 
@@ -85,8 +113,8 @@ impl StringInterner {
         }
 
         let str_id = StrId(self.vec.len() as u32);
-        self.id_map.insert(String::from(name), str_id);
-        self.vec.push(String::from(name));
+        let str_ref = self.alloc(name);
+        self.id_map.insert(str_ref, str_id);
 
         debug_assert!(self.lookup(str_id) == name);
         debug_assert!(self.intern(name) == str_id);
@@ -96,5 +124,13 @@ impl StringInterner {
 
     pub fn lookup(&self, value: StrId) -> &str {
         self.vec[value.0 as usize].as_str()
+    }
+
+    fn alloc(&mut self, name: &str) -> &'static str {
+        let idx = self.vec.len();
+        self.vec.push(String::from(name));
+        // SAFETY: We never drop or move the interned String, so reference will
+        // always be valid while StringInterner instance exists.
+        unsafe { &*(self.vec[idx].as_str() as *const str) }
     }
 }
