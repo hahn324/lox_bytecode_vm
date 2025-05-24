@@ -3,7 +3,8 @@ use crate::{
     compiler::compile,
     debug::disassemble_instruction,
     value::{
-        LoxClass, LoxClosure, LoxFunction, LoxInstance, LoxUpvalue, StrId, StringInterner, Value,
+        BoundMethod, LoxClass, LoxClosure, LoxFunction, LoxInstance, LoxUpvalue, StrId,
+        StringInterner, Value,
     },
 };
 use rustc_hash::FxHashMap;
@@ -46,19 +47,23 @@ pub struct Vm {
     pub global_names: FxHashMap<StrId, usize>,
     pub global_values: Vec<Value>,
     open_upvalues: Option<Rc<RefCell<LoxUpvalue>>>,
+    init_string: StrId,
 }
 impl Vm {
     pub fn new(debug_trace: bool) -> Self {
+        let mut strings = StringInterner::default();
+        let init_string = strings.intern("init");
         let mut vm = Self {
             frames: [const { None }; FRAMES_MAX],
             frame_count: 0,
             stack: [const { Value::Undefined }; STACK_MAX],
             stack_count: 0,
             debug_trace,
-            strings: StringInterner::default(),
+            strings,
             global_names: FxHashMap::default(),
             global_values: Vec::new(),
             open_upvalues: None,
+            init_string,
         };
         // Initialize global native functions
         vm.define_native("clock", clock_native, 0);
@@ -90,7 +95,9 @@ impl Vm {
 
     fn pop(&mut self) -> Value {
         self.stack_count -= 1;
-        self.stack[self.stack_count].clone()
+        let popped_val = self.stack[self.stack_count].clone();
+        self.stack[self.stack_count] = Value::Undefined;
+        popped_val
     }
 
     fn run(&mut self) -> InterpretResult {
@@ -122,6 +129,7 @@ impl Vm {
                     print!(", ");
                 }
                 println!("]");
+                println!("Stack count: {}", self.stack_count); // TODO: delete line
                 disassemble_instruction(
                     &current_frame.closure.function.chunk,
                     current_frame.ip,
@@ -140,7 +148,9 @@ impl Vm {
                         return InterpretResult::InterpretOk;
                     }
 
-                    self.stack_count = current_frame.frame_ptr;
+                    while self.stack_count > current_frame.frame_ptr {
+                        self.pop();
+                    }
                     self.push(result);
                     current_frame = self.frames[self.frame_count - 1]
                         .take()
@@ -404,19 +414,15 @@ impl Vm {
                     };
                     let offset = Vm::get_offset_short(&mut current_frame);
                     let value = current_frame.closure.function.chunk.constants[offset].clone();
-                    let str_id = match value {
+                    let name = match value {
                         Value::String(str_id) => str_id,
                         _ => unreachable!("Will always be String variant for GetProperty."),
                     };
 
-                    if let Some(value) = instance.fields.borrow().get(&str_id) {
+                    if let Some(value) = instance.fields.borrow().get(&name) {
                         self.pop();
                         self.push(value.clone());
-                    } else {
-                        self.runtime_error(
-                            &current_frame,
-                            &format!("Undefined property '{}'.", self.strings.lookup(str_id)),
-                        );
+                    } else if !self.bind_method(Rc::clone(&instance.klass), name, &current_frame) {
                         return InterpretResult::InterpretRuntimeError;
                     }
                 }
@@ -430,18 +436,18 @@ impl Vm {
                     };
                     let offset = Vm::get_offset_long(&mut current_frame);
                     let value = current_frame.closure.function.chunk.constants[offset].clone();
-                    let str_id = match value {
+                    let name = match value {
                         Value::String(str_id) => str_id,
                         _ => unreachable!("Will always be String variant for GetPropertyLong."),
                     };
 
-                    if let Some(value) = instance.fields.borrow().get(&str_id) {
+                    if let Some(value) = instance.fields.borrow().get(&name) {
                         self.pop();
                         self.push(value.clone());
                     } else {
                         self.runtime_error(
                             &current_frame,
-                            &format!("Undefined property '{}'.", self.strings.lookup(str_id)),
+                            &format!("Undefined property '{}'.", self.strings.lookup(name)),
                         );
                         return InterpretResult::InterpretRuntimeError;
                     }
@@ -484,7 +490,59 @@ impl Vm {
                     self.pop();
                     self.push(value);
                 }
+                OpCode::Method => {
+                    let offset = Vm::get_offset_short(&mut current_frame);
+                    let method_name =
+                        current_frame.closure.function.chunk.constants[offset].clone();
+                    let str_id = match method_name {
+                        Value::String(str_id) => str_id,
+                        _ => unreachable!("Will always be String variant for Method."),
+                    };
+                    self.define_method(str_id);
+                }
+                OpCode::MethodLong => {
+                    let offset = Vm::get_offset_long(&mut current_frame);
+                    let method_name =
+                        current_frame.closure.function.chunk.constants[offset].clone();
+                    let str_id = match method_name {
+                        Value::String(str_id) => str_id,
+                        _ => unreachable!("Will always be String variant for Method."),
+                    };
+                    self.define_method(str_id);
+                }
+                OpCode::Invoke => {
+                    let str_offset = Vm::get_offset_short(&mut current_frame);
+                    let method_str_id =
+                        match current_frame.closure.function.chunk.constants[str_offset].clone() {
+                            Value::String(str_id) => str_id,
+                            _ => unreachable!("Will always be String variant for Invoke."),
+                        };
+                    let arg_count = Vm::get_offset_short(&mut current_frame);
+
+                    if !self.invoke(method_str_id, arg_count as u8, &current_frame) {
+                        return InterpretResult::InterpretRuntimeError;
+                    }
+                    // Switch to new CallFrame if one was added.
+                    if self.frames[self.frame_count - 1].is_some() {
+                        self.frames[self.frame_count - 2] = Some(current_frame);
+                        current_frame = self.frames[self.frame_count - 1]
+                            .take()
+                            .expect("Will always be a new CallFrame.");
+                    }
+                }
+                OpCode::InvokeLong => {
+                    todo!();
+                }
             }
+        }
+    }
+
+    fn print_function(&self, function: &LoxFunction) {
+        match function.name {
+            Some(name_id) => {
+                print!("<fn {}>", self.strings.lookup(name_id))
+            }
+            None => print!("<script>"),
         }
     }
 
@@ -497,25 +555,16 @@ impl Vm {
             }
             Value::Nil => print!("Nil"),
             Value::Undefined => print!("Undefined"),
-            Value::Function(lox_fun) => match lox_fun.name {
-                Some(name_id) => {
-                    print!("<fn {}>", self.strings.lookup(name_id))
-                }
-                None => print!("<script>"),
-            },
+            Value::Function(lox_fun) => self.print_function(lox_fun),
             Value::Native(_, _) => print!("<native fn>"),
-            Value::Closure(closure) => match closure.function.name {
-                Some(name_id) => {
-                    print!("<fn {}>", self.strings.lookup(name_id))
-                }
-                None => print!("<script>"),
-            },
+            Value::Closure(closure) => self.print_function(&closure.function),
             Value::Class(klass) => {
                 print!("{}", self.strings.lookup(klass.name));
             }
             Value::Instance(instance) => {
                 print!("{} instance", self.strings.lookup(instance.klass.name));
             }
+            Value::Method(bound_method) => self.print_function(&bound_method.method.function),
         }
     }
 
@@ -552,9 +601,24 @@ impl Vm {
 
     fn call_value(&mut self, callee: Value, arg_count: u8, current_frame: &CallFrame) -> bool {
         match callee {
+            Value::Method(bound_method) => {
+                self.stack[self.stack_count - arg_count as usize - 1] =
+                    bound_method.receiver.clone();
+                self.call(Rc::clone(&bound_method.method), arg_count, current_frame)
+            }
             Value::Class(klass) => {
                 self.stack[self.stack_count - arg_count as usize - 1] =
-                    Value::Instance(Rc::new(LoxInstance::new(klass)));
+                    Value::Instance(Rc::new(LoxInstance::new(klass.clone())));
+                if let Some(initializer) = klass.methods.borrow().get(&self.init_string) {
+                    return self.call(Rc::clone(initializer), arg_count, current_frame);
+                }
+                if arg_count != 0 {
+                    self.runtime_error(
+                        current_frame,
+                        &format!("Expected 0 arguments but got {arg_count}."),
+                    );
+                    return false;
+                }
                 return true;
             }
             Value::Closure(lox_closure) => self.call(lox_closure, arg_count, current_frame),
@@ -575,6 +639,57 @@ impl Vm {
                 self.runtime_error(current_frame, "Can only call functions and classes.");
                 false
             }
+        }
+    }
+
+    fn invoke_from_class(
+        &mut self,
+        klass: Rc<LoxClass>,
+        name: StrId,
+        arg_count: u8,
+        current_frame: &CallFrame,
+    ) -> bool {
+        if let Some(method) = klass.methods.borrow().get(&name) {
+            self.call(Rc::clone(method), arg_count, current_frame)
+        } else {
+            self.runtime_error(
+                current_frame,
+                &format!("Undefined property '{}'", self.strings.lookup(name)),
+            );
+            false
+        }
+    }
+
+    fn invoke(&mut self, name: StrId, arg_count: u8, current_frame: &CallFrame) -> bool {
+        let receiver = self.peek(arg_count as usize);
+        match receiver {
+            Value::Instance(instance) => {
+                if let Some(value) = instance.fields.borrow().get(&name) {
+                    self.stack[self.stack_count - arg_count as usize - 1] = value.clone();
+                    self.call_value(value.clone(), arg_count, current_frame)
+                } else {
+                    self.invoke_from_class(instance.klass.clone(), name, arg_count, current_frame)
+                }
+            }
+            _ => {
+                self.runtime_error(current_frame, "Only instances have methods.");
+                false
+            }
+        }
+    }
+
+    fn bind_method(&mut self, klass: Rc<LoxClass>, name: StrId, current_frame: &CallFrame) -> bool {
+        if let Some(method) = klass.methods.borrow().get(&name) {
+            let bound = Value::Method(Rc::new(BoundMethod::new(self.peek(0), Rc::clone(method))));
+            self.pop();
+            self.push(bound);
+            true
+        } else {
+            self.runtime_error(
+                &current_frame,
+                &format!("Undefined property '{}'.", self.strings.lookup(name)),
+            );
+            false
         }
     }
 
@@ -643,6 +758,19 @@ impl Vm {
             upvalue.borrow_mut().location = 0;
             self.open_upvalues = upvalue.borrow().next.clone();
         }
+    }
+
+    fn define_method(&mut self, method_str_id: StrId) {
+        let method = match self.peek(0) {
+            Value::Closure(closure) => closure,
+            _ => unreachable!("Top of stack during METHOD OP will always be the closure."),
+        };
+        let klass = match self.peek(1) {
+            Value::Class(klass) => klass,
+            _ => unreachable!("Below method closure will always be Class."),
+        };
+        klass.methods.borrow_mut().insert(method_str_id, method);
+        self.pop();
     }
 
     /// Reads 1 byte offset operand.

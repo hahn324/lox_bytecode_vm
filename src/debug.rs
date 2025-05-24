@@ -160,6 +160,12 @@ pub fn disassemble_instruction(chunk: &Chunk, mut ip: usize, vm: &Vm) -> usize {
         OpCode::GetPropertyLong => {
             offset_long_instruction("OP_GET_PROPERTY_LONG", chunk, ip, InstructionType::Load, vm)
         }
+        OpCode::Method => offset_instruction("OP_METHOD", chunk, ip, InstructionType::Load, vm),
+        OpCode::MethodLong => {
+            offset_long_instruction("OP_METHOD_LONG", chunk, ip, InstructionType::Load, vm)
+        }
+        OpCode::Invoke => invoke_instruction("OP_INVOKE", chunk, ip, vm),
+        OpCode::InvokeLong => invoke_instruction("OP_INVOKE_LONG", chunk, ip, vm),
     }
 }
 
@@ -227,6 +233,28 @@ fn offset_long_instruction(
     }
     print!("'\n");
     ip + 4
+}
+
+fn invoke_instruction(name: &str, chunk: &Chunk, ip: usize, vm: &Vm) -> usize {
+    let mut ip_offset = ip + 2;
+    let method_offset = if name == "OP_INVOKE" {
+        ip_offset += 1;
+        chunk.code[ip + 1] as usize
+    } else {
+        ip_offset += 3;
+        let left_byte = chunk.code[ip + 1] as usize;
+        let middle_byte = chunk.code[ip + 2] as usize;
+        let right_byte = chunk.code[ip + 3] as usize;
+        (left_byte << 16) + (middle_byte << 8) + right_byte
+    };
+
+    let arg_count = chunk.code[ip_offset - 1];
+
+    print!("{name:<16} ({arg_count} args) {method_offset:4} '");
+    vm.print_value(&chunk.constants[method_offset]);
+    print!("'\n");
+
+    ip_offset
 }
 
 fn jump_instruction(name: &str, back: bool, chunk: &Chunk, ip: usize) -> usize {

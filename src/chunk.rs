@@ -47,6 +47,10 @@ pub enum OpCode {
     SetPropertyLong,
     GetProperty,
     GetPropertyLong,
+    Method,
+    MethodLong,
+    Invoke,
+    InvokeLong,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -95,6 +99,10 @@ impl From<u8> for OpCode {
             41 => OpCode::SetPropertyLong,
             42 => OpCode::GetProperty,
             43 => OpCode::GetPropertyLong,
+            44 => OpCode::Method,
+            45 => OpCode::MethodLong,
+            46 => OpCode::Invoke,
+            47 => OpCode::InvokeLong,
             _ => panic!("Unknown byte code {byte}"),
         }
     }

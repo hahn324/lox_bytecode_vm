@@ -91,6 +91,8 @@ struct Upvalue {
 #[derive(Debug, Clone, Copy)]
 enum FunctionType {
     Function,
+    Initializer,
+    Method,
     Script,
 }
 
@@ -105,9 +107,14 @@ struct Compiler<'src> {
 
 impl<'src> Compiler<'src> {
     fn new(function_type: FunctionType, name: Option<StrId>) -> Self {
+        let lexeme = match function_type {
+            FunctionType::Function => "",
+            _ => "this",
+        };
+
         let placeholder = Token {
             token_type: TokenType::Identifier,
-            lexeme: "",
+            lexeme,
             line: 0,
         };
         let locals = vec![Local {
@@ -125,6 +132,8 @@ impl<'src> Compiler<'src> {
     }
 }
 
+struct ClassCompiler {}
+
 struct Parser<'src, 'vm> {
     current: Option<Token<'src>>,
     previous: Option<Token<'src>>,
@@ -134,6 +143,7 @@ struct Parser<'src, 'vm> {
     debug_mode: bool,
     vm: &'vm mut Vm,
     compilers: Vec<Compiler<'src>>,
+    class_compilers: Vec<ClassCompiler>,
     loop_depth: u32,
     loop_condition_offsets: Vec<usize>,
 }
@@ -150,6 +160,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             debug_mode,
             vm,
             compilers: vec![compiler],
+            class_compilers: vec![],
             loop_depth: 0,
             loop_condition_offsets: Vec::new(),
         }
@@ -186,6 +197,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             TokenType::Nil | TokenType::True | TokenType::False => self.literal(),
             TokenType::String => self.string(),
             TokenType::Identifier => self.variable(can_assign),
+            TokenType::This => self.this_(),
             _ => {
                 self.error_at(
                     self.previous.expect("Will always be Some variant."),
@@ -449,7 +461,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn function(&mut self, function_type: FunctionType) {
         let name = match function_type {
-            FunctionType::Function => Some(self.vm.strings.intern(self.previous.unwrap().lexeme)),
+            FunctionType::Function | FunctionType::Method | FunctionType::Initializer => {
+                Some(self.vm.strings.intern(self.previous.unwrap().lexeme))
+            }
             FunctionType::Script => None,
         };
         self.compilers.push(Compiler::new(function_type, name));
@@ -493,19 +507,38 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
     }
 
+    fn method(&mut self) {
+        self.consume(TokenType::Identifier, "Expect method name.");
+        let str_id = self.vm.strings.intern(&self.previous.unwrap().lexeme);
+        let function_type = match str_id == self.vm.strings.intern("init") {
+            true => FunctionType::Initializer,
+            false => FunctionType::Method,
+        };
+
+        self.function(function_type);
+        self.add_constant_and_emit(Value::String(str_id), OpCode::Method, OpCode::MethodLong);
+    }
+
     fn class_declaration(&mut self) {
         // Consumes class identifier. If 0, then not a global var.
         let global_offset = self.parse_variable("Expect class name.");
 
-        let str_id = self
-            .vm
-            .strings
-            .intern(self.previous.expect("Will contain class name.").lexeme);
+        let class_name = self.previous.expect("Will contain class name.");
+        let str_id = self.vm.strings.intern(class_name.lexeme);
         self.add_constant_and_emit(Value::String(str_id), OpCode::Class, OpCode::ClassLong);
         self.define_variable(global_offset);
 
+        self.class_compilers.push(ClassCompiler {});
+
+        self.named_variable(class_name, false);
         self.consume(TokenType::LeftBrace, "Expect '{' before class body.");
+        while !self.check(TokenType::RightBrace) && self.current.is_some() {
+            self.method();
+        }
         self.consume(TokenType::RightBrace, "Expect '}' after class body.");
+        self.emit_byte(OpCode::Pop as u8);
+
+        self.class_compilers.pop();
     }
 
     fn fun_declaration(&mut self) {
@@ -672,7 +705,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn return_statement(&mut self) {
-        match self.compilers[self.compilers.len() - 1].function_type {
+        let function_type = self.compilers[self.compilers.len() - 1].function_type;
+        match function_type {
             FunctionType::Script => {
                 self.error_at(self.previous.unwrap(), "Can't return from top-level code.")
             }
@@ -682,6 +716,13 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if self.match_token(TokenType::Semicolon) {
             self.emit_return();
         } else {
+            match function_type {
+                FunctionType::Initializer => self.error_at(
+                    self.previous.unwrap(),
+                    "Can't return a value from an initializer.",
+                ),
+                _ => (),
+            }
             self.expression();
             self.consume(TokenType::Semicolon, "Expect ';' after return value.");
             self.emit_byte(OpCode::Return as u8);
@@ -854,6 +895,17 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.named_variable(previous, can_assign);
     }
 
+    fn this_(&mut self) {
+        if self.class_compilers.len() == 0 {
+            self.error_at(
+                self.previous.expect("Will contain 'this' token."),
+                "Can't use 'this' outside of a class.",
+            );
+            return;
+        }
+        self.variable(false);
+    }
+
     fn unary(&mut self) {
         let operator_type = self
             .previous
@@ -914,7 +966,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn dot(&mut self, can_assign: bool) {
         self.consume(TokenType::Identifier, "Expect property name after '.'.");
-        let str_id = self
+        let name = self
             .vm
             .strings
             .intern(self.previous.expect("Will contain property name.").lexeme);
@@ -922,13 +974,17 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if can_assign && self.match_token(TokenType::Equal) {
             self.expression();
             self.add_constant_and_emit(
-                Value::String(str_id),
+                Value::String(name),
                 OpCode::SetProperty,
                 OpCode::SetPropertyLong,
             );
+        } else if self.match_token(TokenType::LeftParen) {
+            let arg_count = self.argument_list();
+            self.add_constant_and_emit(Value::String(name), OpCode::Invoke, OpCode::InvokeLong);
+            self.emit_byte(arg_count);
         } else {
             self.add_constant_and_emit(
-                Value::String(str_id),
+                Value::String(name),
                 OpCode::GetProperty,
                 OpCode::GetPropertyLong,
             );
@@ -1015,7 +1071,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn emit_return(&mut self) {
-        self.emit_byte(OpCode::Nil as u8);
+        match self.compilers[self.compilers.len() - 1].function_type {
+            FunctionType::Initializer => self.emit_bytes(OpCode::GetLocal as u8, 0),
+            _ => self.emit_byte(OpCode::Nil as u8),
+        }
         self.emit_byte(OpCode::Return as u8);
     }
 

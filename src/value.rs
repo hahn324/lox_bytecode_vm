@@ -51,11 +51,15 @@ impl LoxClosure {
 #[derive(Debug, Clone)]
 pub struct LoxClass {
     pub name: StrId,
+    pub methods: RefCell<FxHashMap<StrId, Rc<LoxClosure>>>,
 }
 
 impl LoxClass {
     pub fn new(name: StrId) -> Self {
-        Self { name }
+        Self {
+            name,
+            methods: RefCell::new(FxHashMap::default()),
+        }
     }
 }
 
@@ -75,6 +79,18 @@ impl LoxInstance {
 }
 
 #[derive(Debug, Clone)]
+pub struct BoundMethod {
+    pub receiver: Value,
+    pub method: Rc<LoxClosure>,
+}
+
+impl BoundMethod {
+    pub fn new(receiver: Value, method: Rc<LoxClosure>) -> Self {
+        Self { receiver, method }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Number(f64),
     Bool(bool),
@@ -86,6 +102,7 @@ pub enum Value {
     Closure(Rc<LoxClosure>),
     Class(Rc<LoxClass>),
     Instance(Rc<LoxInstance>),
+    Method(Rc<BoundMethod>),
 }
 
 impl PartialEq for Value {
