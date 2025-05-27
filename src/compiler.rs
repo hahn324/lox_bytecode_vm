@@ -132,7 +132,16 @@ impl<'src> Compiler<'src> {
     }
 }
 
-struct ClassCompiler {}
+struct ClassCompiler {
+    has_super_class: bool,
+}
+impl ClassCompiler {
+    fn new() -> Self {
+        Self {
+            has_super_class: false,
+        }
+    }
+}
 
 struct Parser<'src, 'vm> {
     current: Option<Token<'src>>,
@@ -197,6 +206,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             TokenType::Nil | TokenType::True | TokenType::False => self.literal(),
             TokenType::String => self.string(),
             TokenType::Identifier => self.variable(can_assign),
+            TokenType::Super => self.super_(),
             TokenType::This => self.this_(),
             _ => {
                 self.error_at(
@@ -380,6 +390,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             if compiler.scope_depth == 0 {
                 return;
             }
+            // The compiler locals Vec will always be non-empty here, so will always
+            // produce a valid index.
             let idx = compiler.locals.len() - 1;
             compiler.locals[idx].depth = compiler.scope_depth;
         }
@@ -520,7 +532,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn class_declaration(&mut self) {
-        // Consumes class identifier. If 0, then not a global var.
+        // Consumes class identifier. If global_offset value is 0, then not a global var.
         let global_offset = self.parse_variable("Expect class name.");
 
         let class_name = self.previous.expect("Will contain class name.");
@@ -528,7 +540,25 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.add_constant_and_emit(Value::String(str_id), OpCode::Class, OpCode::ClassLong);
         self.define_variable(global_offset);
 
-        self.class_compilers.push(ClassCompiler {});
+        self.class_compilers.push(ClassCompiler::new());
+
+        if self.match_token(TokenType::Less) {
+            self.consume(TokenType::Identifier, "Expect superclass name.");
+            self.variable(false);
+            if class_name.lexeme == self.previous.unwrap().lexeme {
+                self.error_at(self.previous.unwrap(), "A class can't inherit from itself.");
+            }
+
+            self.begin_scope();
+            self.add_local(self.synthetic_token("super"));
+            self.define_variable(0);
+
+            self.named_variable(class_name, false);
+            self.emit_byte(OpCode::Inherit as u8);
+            if let Some(compiler) = self.class_compilers.last_mut() {
+                compiler.has_super_class = true;
+            }
+        }
 
         self.named_variable(class_name, false);
         self.consume(TokenType::LeftBrace, "Expect '{' before class body.");
@@ -537,6 +567,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
         self.consume(TokenType::RightBrace, "Expect '}' after class body.");
         self.emit_byte(OpCode::Pop as u8);
+
+        if self.class_compilers[self.class_compilers.len() - 1].has_super_class {
+            self.end_scope();
+        }
 
         self.class_compilers.pop();
     }
@@ -893,6 +927,47 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn variable(&mut self, can_assign: bool) {
         let previous = self.previous.expect("Will always be Some variant.");
         self.named_variable(previous, can_assign);
+    }
+
+    fn synthetic_token(&self, text: &'src str) -> Token<'src> {
+        Token::new(TokenType::Synthetic, text, 0)
+    }
+
+    fn super_(&mut self) {
+        match self.class_compilers.last() {
+            Some(current_class) => {
+                if !current_class.has_super_class {
+                    self.error_at(
+                        self.previous.expect("Will have 'super' token"),
+                        "Can't use 'super' in a class with no superclass.",
+                    );
+                }
+            }
+            None => self.error_at(
+                self.previous.expect("Will have 'super' token"),
+                "Can't use 'super' outside of a class.",
+            ),
+        }
+
+        self.consume(TokenType::Dot, "Expect '.' after 'super'.");
+        self.consume(TokenType::Identifier, "Expect superclass method name.");
+        let name = self.vm.strings.intern(self.previous.unwrap().lexeme);
+
+        self.named_variable(self.synthetic_token("this"), false);
+
+        if self.match_token(TokenType::LeftParen) {
+            let arg_count = self.argument_list();
+            self.named_variable(self.synthetic_token("super"), false);
+            self.add_constant_and_emit(
+                Value::String(name),
+                OpCode::SuperInvoke,
+                OpCode::SuperInvokeLong,
+            );
+            self.emit_byte(arg_count);
+        } else {
+            self.named_variable(self.synthetic_token("super"), false);
+            self.add_constant_and_emit(Value::String(name), OpCode::GetSuper, OpCode::GetSuperLong);
+        }
     }
 
     fn this_(&mut self) {

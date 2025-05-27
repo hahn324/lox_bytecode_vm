@@ -166,6 +166,15 @@ pub fn disassemble_instruction(chunk: &Chunk, mut ip: usize, vm: &Vm) -> usize {
         }
         OpCode::Invoke => invoke_instruction("OP_INVOKE", chunk, ip, vm),
         OpCode::InvokeLong => invoke_instruction("OP_INVOKE_LONG", chunk, ip, vm),
+        OpCode::Inherit => simple_instruction("OP_INHERIT", ip),
+        OpCode::GetSuper => {
+            offset_instruction("OP_GET_SUPER", chunk, ip, InstructionType::Load, vm)
+        }
+        OpCode::GetSuperLong => {
+            offset_long_instruction("OP_GET_SUPER_LONG", chunk, ip, InstructionType::Load, vm)
+        }
+        OpCode::SuperInvoke => invoke_instruction("OP_SUPER_INVOKE", chunk, ip, vm),
+        OpCode::SuperInvokeLong => invoke_instruction("OP_SUPER_INVOKE_LONG", chunk, ip, vm),
     }
 }
 
@@ -237,7 +246,7 @@ fn offset_long_instruction(
 
 fn invoke_instruction(name: &str, chunk: &Chunk, ip: usize, vm: &Vm) -> usize {
     let mut ip_offset = ip + 2;
-    let method_offset = if name == "OP_INVOKE" {
+    let method_offset = if name == "OP_INVOKE" || name == "OP_SUPER_INVOKE" {
         ip_offset += 1;
         chunk.code[ip + 1] as usize
     } else {

@@ -129,7 +129,6 @@ impl Vm {
                     print!(", ");
                 }
                 println!("]");
-                println!("Stack count: {}", self.stack_count); // TODO: delete line
                 disassemble_instruction(
                     &current_frame.closure.function.chunk,
                     current_frame.ip,
@@ -531,7 +530,133 @@ impl Vm {
                     }
                 }
                 OpCode::InvokeLong => {
-                    todo!();
+                    let str_offset = Vm::get_offset_long(&mut current_frame);
+                    let method_str_id =
+                        match current_frame.closure.function.chunk.constants[str_offset].clone() {
+                            Value::String(str_id) => str_id,
+                            _ => unreachable!("Will always be String variant for InvokeLong."),
+                        };
+                    let arg_count = Vm::get_offset_short(&mut current_frame);
+
+                    if !self.invoke(method_str_id, arg_count as u8, &current_frame) {
+                        return InterpretResult::InterpretRuntimeError;
+                    }
+                    // Switch to new CallFrame if one was added.
+                    if self.frames[self.frame_count - 1].is_some() {
+                        self.frames[self.frame_count - 2] = Some(current_frame);
+                        current_frame = self.frames[self.frame_count - 1]
+                            .take()
+                            .expect("Will always be a new CallFrame.");
+                    }
+                }
+                OpCode::Inherit => {
+                    let superclass = match self.peek(1) {
+                        Value::Class(klass) => klass,
+                        _ => {
+                            self.runtime_error(&current_frame, "Superclass must be a class.");
+                            return InterpretResult::InterpretRuntimeError;
+                        }
+                    };
+                    let subclass = match self.peek(0) {
+                        Value::Class(klass) => klass,
+                        _ => unreachable!("sublcass will always be variant Class."),
+                    };
+                    subclass
+                        .methods
+                        .replace(superclass.methods.borrow().clone());
+                    self.pop(); // Subclass.
+                }
+                OpCode::GetSuper => {
+                    let name_offset = Vm::get_offset_short(&mut current_frame);
+                    let name_str_id =
+                        match current_frame.closure.function.chunk.constants[name_offset].clone() {
+                            Value::String(str_id) => str_id,
+                            _ => unreachable!("Will always be String variant for GetSuper."),
+                        };
+                    match self.pop() {
+                        Value::Class(superclass) => {
+                            if !self.bind_method(superclass, name_str_id, &current_frame) {
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        }
+                        _ => unreachable!("Will always be Class variant in GetSuper."),
+                    }
+                }
+                OpCode::GetSuperLong => {
+                    let name_offset = Vm::get_offset_long(&mut current_frame);
+                    let name_str_id =
+                        match current_frame.closure.function.chunk.constants[name_offset].clone() {
+                            Value::String(str_id) => str_id,
+                            _ => unreachable!("Will always be String variant for GetSuperLong."),
+                        };
+                    match self.pop() {
+                        Value::Class(superclass) => {
+                            if !self.bind_method(superclass, name_str_id, &current_frame) {
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        }
+                        _ => unreachable!("Will always be Class variant in GetSuper."),
+                    }
+                }
+                OpCode::SuperInvoke => {
+                    let str_offset = Vm::get_offset_short(&mut current_frame);
+                    let method_str_id =
+                        match current_frame.closure.function.chunk.constants[str_offset].clone() {
+                            Value::String(str_id) => str_id,
+                            _ => unreachable!("Will always be String variant for SuperInvoke."),
+                        };
+                    let arg_count = Vm::get_offset_short(&mut current_frame);
+                    match self.pop() {
+                        Value::Class(superclass) => {
+                            if !self.invoke_from_class(
+                                superclass,
+                                method_str_id,
+                                arg_count as u8,
+                                &current_frame,
+                            ) {
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        }
+                        _ => unreachable!("Will always be Class variant in SuperInvoke."),
+                    }
+
+                    // Switch to new CallFrame if one was added.
+                    if self.frames[self.frame_count - 1].is_some() {
+                        self.frames[self.frame_count - 2] = Some(current_frame);
+                        current_frame = self.frames[self.frame_count - 1]
+                            .take()
+                            .expect("Will always be a new CallFrame.");
+                    }
+                }
+                OpCode::SuperInvokeLong => {
+                    let str_offset = Vm::get_offset_long(&mut current_frame);
+                    let method_str_id =
+                        match current_frame.closure.function.chunk.constants[str_offset].clone() {
+                            Value::String(str_id) => str_id,
+                            _ => unreachable!("Will always be String variant for SuperInvokeLong."),
+                        };
+                    let arg_count = Vm::get_offset_short(&mut current_frame);
+                    match self.pop() {
+                        Value::Class(superclass) => {
+                            if !self.invoke_from_class(
+                                superclass,
+                                method_str_id,
+                                arg_count as u8,
+                                &current_frame,
+                            ) {
+                                return InterpretResult::InterpretRuntimeError;
+                            }
+                        }
+                        _ => unreachable!("Will always be Class variant in SuperInvokeLong."),
+                    }
+
+                    // Switch to new CallFrame if one was added.
+                    if self.frames[self.frame_count - 1].is_some() {
+                        self.frames[self.frame_count - 2] = Some(current_frame);
+                        current_frame = self.frames[self.frame_count - 1]
+                            .take()
+                            .expect("Will always be a new CallFrame.");
+                    }
                 }
             }
         }

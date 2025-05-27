@@ -51,6 +51,11 @@ pub enum OpCode {
     MethodLong,
     Invoke,
     InvokeLong,
+    Inherit,
+    GetSuper,
+    GetSuperLong,
+    SuperInvoke,
+    SuperInvokeLong,
 }
 impl From<u8> for OpCode {
     fn from(byte: u8) -> Self {
@@ -103,6 +108,11 @@ impl From<u8> for OpCode {
             45 => OpCode::MethodLong,
             46 => OpCode::Invoke,
             47 => OpCode::InvokeLong,
+            48 => OpCode::Inherit,
+            49 => OpCode::GetSuper,
+            50 => OpCode::GetSuperLong,
+            51 => OpCode::SuperInvoke,
+            52 => OpCode::SuperInvokeLong,
             _ => panic!("Unknown byte code {byte}"),
         }
     }

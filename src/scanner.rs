@@ -73,6 +73,7 @@ pub enum TokenType {
 
     Error,
     Eof,
+    Synthetic,
 }
 
 pub struct Scanner<'src> {
@@ -143,7 +144,7 @@ impl<'src> Iterator for Scanner<'src> {
                         '=',
                         TokenType::BangEqual,
                         TokenType::Bang,
-                    ))
+                    ));
                 }
                 '=' => {
                     return Some(self.if_match_else(
@@ -152,7 +153,7 @@ impl<'src> Iterator for Scanner<'src> {
                         '=',
                         TokenType::EqualEqual,
                         TokenType::Equal,
-                    ))
+                    ));
                 }
                 '<' => {
                     return Some(self.if_match_else(
@@ -161,7 +162,7 @@ impl<'src> Iterator for Scanner<'src> {
                         '=',
                         TokenType::LessEqual,
                         TokenType::Less,
-                    ))
+                    ));
                 }
                 '>' => {
                     return Some(self.if_match_else(
@@ -170,7 +171,7 @@ impl<'src> Iterator for Scanner<'src> {
                         '=',
                         TokenType::GreaterEqual,
                         TokenType::Greater,
-                    ))
+                    ));
                 }
                 ' ' | '\r' | '\t' => (),
                 '\n' => self.line += 1,
@@ -250,7 +251,7 @@ impl<'src> Iterator for Scanner<'src> {
                         TokenType::Error,
                         format!("Unexpected character '{c_str}'.").leak(),
                         self.line,
-                    ))
+                    ));
                 }
             }
         }
