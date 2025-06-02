@@ -200,7 +200,7 @@ impl<'src> Iterator for Scanner<'src> {
                     if self.rest.starts_with('.') {
                         let next_non_digit = self.rest[1..]
                             .find(|c: char| !c.is_ascii_digit())
-                            .unwrap_or_else(|| self.rest.len());
+                            .unwrap_or_else(|| self.rest[1..].len());
                         // Only update self.rest if more digits were found after the '.'
                         if next_non_digit > 0 {
                             self.rest = &self.rest[next_non_digit + 1..];

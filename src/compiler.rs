@@ -490,8 +490,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                         self.current.unwrap_or_else(|| self.create_eof_token()),
                         "Can't have more than 255 parameters.",
                     );
+                } else {
+                    self.compilers[compiler_idx].function.arity += 1;
                 }
-                self.compilers[compiler_idx].function.arity += 1;
                 let constant = self.parse_variable("Expect parameter name.");
                 self.define_variable(constant);
                 if !self.match_token(TokenType::Comma) {
@@ -1226,9 +1227,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.panic_mode.set(true);
 
         match token.token_type {
-            TokenType::Error => println!("[line {}] Error: {}", token.line, token.lexeme),
-            TokenType::Eof => println!("[line {}] Error at end: {}", token.line, message),
-            _ => println!(
+            TokenType::Error => eprintln!("[line {}] Error: {}", token.line, token.lexeme),
+            TokenType::Eof => eprintln!("[line {}] Error at end: {}", token.line, message),
+            _ => eprintln!(
                 "[line {}] Error at '{}': {}",
                 token.line, token.lexeme, message
             ),

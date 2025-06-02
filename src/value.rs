@@ -112,6 +112,11 @@ impl PartialEq for Value {
             (Value::Bool(lhs), Value::Bool(rhs)) => *lhs == *rhs,
             (Value::String(lhs), Value::String(rhs)) => *lhs == *rhs,
             (Value::Nil, Value::Nil) => true,
+            (Value::Function(lhs), Value::Function(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Value::Closure(lhs), Value::Closure(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Value::Class(lhs), Value::Class(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Value::Instance(lhs), Value::Instance(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Value::Method(lhs), Value::Method(rhs)) => Rc::ptr_eq(lhs, rhs),
             _ => false,
         }
     }

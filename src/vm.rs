@@ -678,7 +678,7 @@ impl Vm {
             Value::String(str_id) => {
                 print!("{}", self.strings.lookup(*str_id));
             }
-            Value::Nil => print!("Nil"),
+            Value::Nil => print!("nil"),
             Value::Undefined => print!("Undefined"),
             Value::Function(lox_fun) => self.print_function(lox_fun),
             Value::Native(_, _) => print!("<native fn>"),
@@ -779,7 +779,7 @@ impl Vm {
         } else {
             self.runtime_error(
                 current_frame,
-                &format!("Undefined property '{}'", self.strings.lookup(name)),
+                &format!("Undefined property '{}'.", self.strings.lookup(name)),
             );
             false
         }
@@ -925,7 +925,7 @@ impl Vm {
     }
 
     fn runtime_error(&mut self, current_frame: &CallFrame, err_msg: &str) {
-        eprintln!("Runtime Error: {err_msg}");
+        eprintln!("{err_msg}");
 
         for frame_idx in (0..self.frame_count).rev() {
             let frame = self.frames[frame_idx].as_ref().unwrap_or(current_frame);

@@ -1,0 +1,4 @@
+// [c line 4] Error: Unexpected character '|'.
+// [java line 4] Error: Unexpected character.
+// [java line 4] Error at 'b': Expect ')' after arguments.
+foo(a | b);
