@@ -1,7 +1,9 @@
 use crate::{
+    ALLOCATED,
     chunk::OpCode,
     compiler::compile,
     debug::disassemble_instruction,
+    gc,
     value::{
         BoundMethod, LoxClass, LoxClosure, LoxFunction, LoxInstance, LoxUpvalue, StrId,
         StringInterner, Value,
@@ -10,7 +12,8 @@ use crate::{
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::cmp;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::SystemTime;
 
 const FRAMES_MAX: usize = 64;
@@ -40,7 +43,7 @@ struct CallFrame {
 pub struct Vm {
     frames: [Option<CallFrame>; FRAMES_MAX],
     frame_count: usize,
-    stack: [Value; STACK_MAX],
+    pub stack: [Value; STACK_MAX],
     stack_count: usize,
     debug_trace: bool,
     pub strings: StringInterner,
@@ -48,6 +51,9 @@ pub struct Vm {
     pub global_values: Vec<Value>,
     open_upvalues: Option<Rc<RefCell<LoxUpvalue>>>,
     init_string: StrId,
+    pub instances: Vec<Weak<LoxInstance>>,
+    pub next_gc: usize,
+    pub gc_heap_grow_factor: usize,
 }
 impl Vm {
     pub fn new(debug_trace: bool) -> Self {
@@ -64,6 +70,9 @@ impl Vm {
             global_values: Vec::new(),
             open_upvalues: None,
             init_string,
+            instances: Vec::with_capacity(100),
+            next_gc: 1024 * 1024,
+            gc_heap_grow_factor: 2,
         };
         // Initialize global native functions
         vm.define_native("clock", clock_native, 0);
@@ -117,9 +126,19 @@ impl Vm {
             };
         }
 
-        let mut current_frame = self.frames[self.frame_count - 1]
-            .take()
-            .expect("Will always be Some(CallFrame).");
+        let mut current_frame = match self.frames[self.frame_count - 1].take() {
+            Some(frame) => frame,
+            None => {
+                eprintln!("Frames:");
+                for idx in 0..self.frame_count {
+                    eprintln!("{idx}: {:?}", self.frames[idx]);
+                }
+                panic!(
+                    "Should always be Some(CallFrame). frame_count: {}",
+                    self.frame_count
+                );
+            }
+        };
 
         loop {
             if self.debug_trace {
@@ -465,6 +484,7 @@ impl Vm {
                         Value::String(str_id) => str_id,
                         _ => unreachable!("Will always be String variant for SetProperty."),
                     };
+
                     instance.fields.borrow_mut().insert(str_id, self.peek(0));
                     let value = self.pop();
                     self.pop();
@@ -484,6 +504,7 @@ impl Vm {
                         Value::String(str_id) => str_id,
                         _ => unreachable!("Will always be String variant for SetPropertyLong."),
                     };
+
                     instance.fields.borrow_mut().insert(str_id, self.peek(0));
                     let value = self.pop();
                     self.pop();
@@ -732,8 +753,13 @@ impl Vm {
                 self.call(Rc::clone(&bound_method.method), arg_count, current_frame)
             }
             Value::Class(klass) => {
+                if ALLOCATED.load(Relaxed) > self.next_gc {
+                    gc::collect_garbage(self);
+                }
+                let new_instance = Rc::new(LoxInstance::new(klass.clone()));
+                self.instances.push(Rc::downgrade(&new_instance));
                 self.stack[self.stack_count - arg_count as usize - 1] =
-                    Value::Instance(Rc::new(LoxInstance::new(klass.clone())));
+                    Value::Instance(new_instance);
                 if let Some(initializer) = klass.methods.borrow().get(&self.init_string) {
                     return self.call(Rc::clone(initializer), arg_count, current_frame);
                 }

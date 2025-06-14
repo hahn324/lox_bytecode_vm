@@ -1,6 +1,6 @@
 use crate::chunk::Chunk;
 use rustc_hash::FxHashMap;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Copy, Eq, Hash)]
@@ -67,6 +67,7 @@ impl LoxClass {
 pub struct LoxInstance {
     pub klass: Rc<LoxClass>,
     pub fields: RefCell<FxHashMap<StrId, Value>>,
+    pub is_marked: Cell<bool>,
 }
 
 impl LoxInstance {
@@ -74,6 +75,7 @@ impl LoxInstance {
         Self {
             klass,
             fields: RefCell::new(FxHashMap::default()),
+            is_marked: Cell::new(false),
         }
     }
 }
