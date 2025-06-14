@@ -71,7 +71,7 @@ impl Vm {
             open_upvalues: None,
             init_string,
             instances: Vec::with_capacity(100),
-            next_gc: 1024 * 1024,
+            next_gc: 1024 * 1024 * 10,
             gc_heap_grow_factor: 2,
         };
         // Initialize global native functions
